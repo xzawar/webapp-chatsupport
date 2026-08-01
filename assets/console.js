@@ -1,0 +1,1222 @@
+/*
+ * Support Chat Web — console.
+ *
+ * Pairing model, and why it looks like this.
+ * ------------------------------------------
+ * The backend is Firebase only, on the Spark plan: no Cloud Functions, no Admin SDK, so nothing
+ * anywhere can mint a custom token. That rules out the literal WhatsApp Web design, where the
+ * phone hands the browser a signed credential.
+ *
+ * What happens instead:
+ *   1. The browser signs in ANONYMOUSLY and gets its own uid.
+ *   2. It writes pairing/{sessionId} = { webUid, status: 'waiting' } and renders a QR holding
+ *      "sc1:<sessionId>:<secret>". The secret is never written — it exists only on screen.
+ *   3. The phone, already signed in as the tenant owner, scans it, then writes the approval:
+ *      status -> 'approved', tenantId, and the secret it just read off the screen.
+ *   4. The browser checks the secret it receives equals the one it generated. That is what stops
+ *      somebody who guesses a sessionId from binding this browser to THEIR tenant.
+ *   5. The phone also writes the grant: chats/{tenantId}/sessions/{webUid}. The security rules
+ *      treat "owner uid" OR "a uid listed under sessions" as authorised, so from that moment the
+ *      anonymous browser reads and writes exactly what the owner can, and not one tenant more.
+ *
+ * Revoking is deleting that node, which Storage and data does, and which the rules honour
+ * immediately on the next read.
+ */
+
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+import {
+	getAuth,
+	signInAnonymously,
+	onAuthStateChanged,
+} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+import {
+	getDatabase,
+	ref,
+	child,
+	get as dbGet,
+	set as dbSet,
+	update as dbUpdate,
+	remove as dbRemove,
+	push as dbPush,
+	onValue,
+	query as dbQuery,
+	orderByChild,
+	onDisconnect,
+} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js';
+import {
+	getFirestore,
+	doc,
+	getDoc,
+	setDoc,
+	deleteDoc,
+	collection,
+	getDocs,
+	query as fsQuery,
+	orderBy,
+} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+
+import { qrMatrix, drawQr } from './qr.js';
+import { ICONS, avatarFor } from './icons.js';
+
+// --------------------------------------------------------------- constants
+const FIREBASE_CONFIG = {
+	apiKey: 'AIzaSyBErf6PTxfu24t_UBIsoiH6hJdNFMQDzWM',
+	authDomain: 'chat-support-1.firebaseapp.com',
+	projectId: 'chat-support-1',
+	databaseURL: 'https://chat-support-1-default-rtdb.asia-southeast1.firebasedatabase.app',
+};
+
+const PAIR_TTL = 3 * 60 * 1000; // a QR is only good for three minutes
+const STORE_KEY = 'supportchat.web.v1';
+const FEATURE_EMAIL = 'email_automation';
+const FEATURE_SOCIAL = 'social_media';
+
+// ------------------------------------------------------------------- state
+const state = {
+	uid: null,
+	tenantId: null,
+	tenant: null,
+	plans: [],
+	leads: [],
+	templates: [],
+	website: null,
+	conversations: [],
+	messages: [],
+	openId: null,
+	filter: 'All',
+	search: '',
+	page: 'chats',
+	online: true,
+	pair: null,
+	unsubConvos: null,
+	unsubMsgs: null,
+	sending: false,
+};
+
+let app;
+let auth;
+let db;
+let fs;
+
+// ---------------------------------------------------------------- helpers
+const $ = (sel) => document.querySelector(sel);
+const el = (tag, cls, text) => {
+	const n = document.createElement(tag);
+	if (cls) n.className = cls;
+	if (text != null) n.textContent = text;
+	return n;
+};
+
+function randomId(length) {
+	const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+	const bytes = new Uint8Array(length);
+	crypto.getRandomValues(bytes);
+	let out = '';
+	for (const b of bytes) out += alphabet[b % alphabet.length];
+	return out;
+}
+
+function escapeHtml(text) {
+	return String(text == null ? '' : text).replace(/[&<>"']/g, (c) => ({
+		'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+	}[c]));
+}
+
+function timeLabel(ms) {
+	if (!ms) return '';
+	const d = new Date(ms);
+	const now = new Date();
+	const sameDay = d.toDateString() === now.toDateString();
+	if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+	const yesterday = new Date(now.getTime() - 86400000);
+	if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+	return d.toLocaleDateString([], { day: '2-digit', month: 'short' });
+}
+
+function dayLabel(ms) {
+	const d = new Date(ms);
+	const now = new Date();
+	if (d.toDateString() === now.toDateString()) return 'Today';
+	const yesterday = new Date(now.getTime() - 86400000);
+	if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+	return d.toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function toast(message) {
+	const host = $('#toasts');
+	const node = el('div', 'toast', message);
+	host.appendChild(node);
+	setTimeout(() => {
+		node.classList.add('out');
+		setTimeout(() => node.remove(), 280);
+	}, 3000);
+}
+
+function stored() {
+	try {
+		return JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+	} catch (err) {
+		return null;
+	}
+}
+
+function storeSession(value) {
+	if (value) localStorage.setItem(STORE_KEY, JSON.stringify(value));
+	else localStorage.removeItem(STORE_KEY);
+}
+
+// ------------------------------------------------------------------ theme
+function applyTheme(mode) {
+	const resolved = mode || localStorage.getItem('supportchat.theme') || 'light';
+	document.documentElement.dataset.theme = resolved;
+	localStorage.setItem('supportchat.theme', resolved);
+}
+
+// ==========================================================================
+// Pairing
+// ==========================================================================
+async function beginPairing() {
+	const sessionId = randomId(22);
+	const secret = randomId(24);
+	const now = Date.now();
+
+	state.pair = { sessionId, secret, expiresAt: now + PAIR_TTL, unsub: null };
+
+	await dbSet(ref(db, `pairing/${sessionId}`), {
+		webUid: state.uid,
+		status: 'waiting',
+		createdAt: now,
+		expiresAt: now + PAIR_TTL,
+		ua: navigator.userAgent.slice(0, 280),
+	});
+	// If this tab dies before it is claimed, do not leave the node lying around.
+	onDisconnect(ref(db, `pairing/${sessionId}`)).remove();
+
+	const canvas = $('#qr');
+	drawQr(canvas, qrMatrix(`sc1:${sessionId}:${secret}`), { pixels: 264 });
+	$('#qrVeil').classList.add('hidden');
+	setStatus('Waiting for your phone…');
+
+	const node = ref(db, `pairing/${sessionId}`);
+	state.pair.unsub = onValue(node, async (snap) => {
+		const value = snap.val();
+		if (!value || value.status !== 'approved') return;
+
+		if (value.secret !== secret) {
+			// Somebody approved a session they could not have seen on this screen.
+			setStatus('That pairing attempt did not match this screen. Generating a new code…', 'err');
+			await dbRemove(node).catch(() => {});
+			setTimeout(() => window.location.reload(), 2200);
+			return;
+		}
+		if (!value.tenantId) return;
+
+		state.pair.unsub();
+		setStatus('Paired. Loading your workspace…', 'ok');
+		await dbRemove(node).catch(() => {});
+		storeSession({ tenantId: value.tenantId, uid: state.uid });
+		enterConsole(value.tenantId);
+	});
+
+	// Expire the code on screen so a stale QR is never left scannable.
+	setTimeout(() => {
+		if (!state.tenantId) {
+			$('#qrVeil').classList.remove('hidden');
+			$('#qrVeil').textContent = 'This code expired. Click to get a new one.';
+			$('#qrVeil').style.cursor = 'pointer';
+			$('#qrVeil').onclick = () => window.location.reload();
+			setStatus('Code expired.', 'err');
+		}
+	}, PAIR_TTL);
+}
+
+function setStatus(text, kind) {
+	const node = $('#pairStatus');
+	node.textContent = text;
+	node.className = 'pair-status' + (kind ? ' ' + kind : '');
+}
+
+/** Reconnect a browser that has paired before, if the grant is still in place. */
+async function resumeSession() {
+	const saved = stored();
+	if (!saved || !saved.tenantId || saved.uid !== state.uid) return false;
+	try {
+		const snap = await dbGet(ref(db, `chats/${saved.tenantId}/sessions/${state.uid}`));
+		if (!snap.exists()) {
+			storeSession(null);
+			return false;
+		}
+		enterConsole(saved.tenantId);
+		return true;
+	} catch (err) {
+		storeSession(null);
+		return false;
+	}
+}
+
+// ==========================================================================
+// Console boot
+// ==========================================================================
+async function enterConsole(tenantId) {
+	state.tenantId = tenantId;
+	$('#pairing').classList.add('hidden');
+	$('#shell').classList.remove('hidden');
+
+	// Keep the grant warm so the phone can show when this browser was last used.
+	const seen = ref(db, `chats/${tenantId}/sessions/${state.uid}/lastSeenAt`);
+	dbSet(seen, Date.now()).catch(() => {});
+	setInterval(() => dbSet(seen, Date.now()).catch(() => {}), 60000);
+
+	watchConnection();
+	watchConversations();
+	await loadTenant();
+	renderDrawer();
+	showPage(state.page);
+}
+
+function watchConnection() {
+	onValue(ref(db, '.info/connected'), (snap) => {
+		state.online = snap.val() === true;
+		const pill = $('#connPill');
+		pill.classList.toggle('off', !state.online);
+		$('#connText').textContent = state.online ? 'Connected' : 'Reconnecting';
+	});
+}
+
+async function loadTenant() {
+	try {
+		const snap = await getDoc(doc(fs, 'tenants', state.tenantId));
+		state.tenant = snap.exists() ? snap.data() : null;
+	} catch (err) {
+		state.tenant = null;
+	}
+	try {
+		const websites = await getDocs(collection(fs, 'tenants', state.tenantId, 'websites'));
+		state.website = websites.empty ? null : { id: websites.docs[0].id, ...websites.docs[0].data() };
+	} catch (err) {
+		state.website = null;
+	}
+}
+
+// ==========================================================================
+// Live chat data
+// ==========================================================================
+function watchConversations() {
+	if (state.unsubConvos) state.unsubConvos();
+	const node = dbQuery(
+		ref(db, `chats/${state.tenantId}/conversations`),
+		orderByChild('lastMessage/at'),
+	);
+	state.unsubConvos = onValue(
+		node,
+		(snap) => {
+			const rows = [];
+			snap.forEach((c) => {
+				const v = c.val() || {};
+				const visitor = v.visitor || {};
+				rows.push({
+					id: c.key,
+					status: v.status || 'open',
+					assignedAgentUid: v.assignedAgentUid || null,
+					unread: Number(v.unread || 0),
+					lastText: (v.lastMessage && v.lastMessage.text) || '',
+					lastSender: (v.lastMessage && v.lastMessage.sender) || '',
+					lastAt: Number((v.lastMessage && v.lastMessage.at) || v.createdAt || 0),
+					createdAt: Number(v.createdAt || 0),
+					name: visitor.name || 'Website visitor',
+					email: visitor.email || '',
+					pageUrl: visitor.pageUrl || '',
+					country: visitor.country || '',
+					userAgent: visitor.userAgent || '',
+				});
+			});
+			rows.reverse(); // newest first
+			state.conversations = rows;
+			if (state.page === 'chats') renderInbox();
+			renderDrawer();
+		},
+		() => toast('Could not read conversations. The pairing may have been revoked.'),
+	);
+}
+
+function watchMessages(conversationId) {
+	if (state.unsubMsgs) state.unsubMsgs();
+	state.messages = [];
+	const node = dbQuery(
+		ref(db, `chats/${state.tenantId}/messages/${conversationId}`),
+		orderByChild('createdAt'),
+	);
+	state.unsubMsgs = onValue(node, (snap) => {
+		const rows = [];
+		snap.forEach((m) => {
+			const v = m.val() || {};
+			rows.push({
+				id: m.key,
+				sender: v.sender || 'visitor',
+				text: v.text || '',
+				createdAt: Number(v.createdAt || 0),
+				readAt: v.readAt ? Number(v.readAt) : null,
+			});
+		});
+		state.messages = rows;
+		renderThread();
+		markRead(conversationId);
+	});
+}
+
+/*
+ * The "seen here is seen there" half of the request.
+ *
+ * Both surfaces write the SAME two things when a thread is on screen: the conversation's unread
+ * counter goes to zero, and every visitor message that has no readAt gets one. Neither surface
+ * owns the flag, so whichever looks first clears it, and the other redraws from the RTDB event a
+ * moment later without being told anything directly.
+ */
+async function markRead(conversationId) {
+	const convo = state.conversations.find((c) => c.id === conversationId);
+	const updates = {};
+	const base = `chats/${state.tenantId}`;
+
+	if (!convo || convo.unread > 0) {
+		updates[`${base}/conversations/${conversationId}/unread`] = 0;
+	}
+	const now = Date.now();
+	for (const m of state.messages) {
+		if (m.sender === 'visitor' && !m.readAt) {
+			updates[`${base}/messages/${conversationId}/${m.id}/readAt`] = now;
+		}
+	}
+	if (Object.keys(updates).length === 0) return;
+	try {
+		await dbUpdate(ref(db), updates);
+	} catch (err) {
+		/* A closed or purged thread can reject this; it is not worth interrupting the agent. */
+	}
+}
+
+async function sendMessage(text) {
+	const body = text.trim();
+	if (!body || !state.openId || state.sending) return;
+	state.sending = true;
+	const conversationId = state.openId;
+	const now = Date.now();
+	const base = `chats/${state.tenantId}`;
+	const key = dbPush(ref(db, `${base}/messages/${conversationId}`)).key;
+
+	try {
+		await dbUpdate(ref(db), {
+			[`${base}/messages/${conversationId}/${key}`]: {
+				sender: 'agent',
+				text: body,
+				createdAt: now,
+			},
+			[`${base}/conversations/${conversationId}/lastMessage`]: {
+				text: body.slice(0, 4000),
+				sender: 'agent',
+				at: now,
+			},
+			[`${base}/conversations/${conversationId}/unreadForVisitor`]: 1,
+		});
+	} catch (err) {
+		toast('Message not sent. Check the connection and try again.');
+	} finally {
+		state.sending = false;
+	}
+}
+
+async function setStatusOf(conversationId, status) {
+	try {
+		const updates = { [`chats/${state.tenantId}/conversations/${conversationId}/status`]: status };
+		if (status === 'open') {
+			updates[`chats/${state.tenantId}/conversations/${conversationId}/startedAt`] = Date.now();
+		}
+		await dbUpdate(ref(db), updates);
+		if (status === 'open') {
+			// Mirrors the app's Start chat, so the visitor sees the same confirmation line.
+			const base = `chats/${state.tenantId}`;
+			const key = dbPush(ref(db, `${base}/messages/${conversationId}`)).key;
+			const now = Date.now();
+			await dbUpdate(ref(db), {
+				[`${base}/messages/${conversationId}/${key}`]: {
+					sender: 'system',
+					text: 'Customer care connected.',
+					createdAt: now,
+				},
+				[`${base}/conversations/${conversationId}/lastMessage`]: {
+					text: 'Customer care connected.',
+					sender: 'system',
+					at: now,
+				},
+			});
+		}
+		toast(status === 'closed' ? 'Conversation closed.' : 'Chat started.');
+	} catch (err) {
+		toast('Could not update that conversation.');
+	}
+}
+
+// ==========================================================================
+// Navigation
+// ==========================================================================
+// Exact web navigation requested: the same core areas as the app, nothing else.
+const PAGES = [
+	{ id: 'chats',      label: 'Chats',            icon: 'chat',      tint: '#1D6FE0' },
+	{ id: 'emails',     label: 'Email',            icon: 'mail',      tint: '#0E8F86', feature: FEATURE_EMAIL },
+	{ id: 'automation', label: 'Email automation', icon: 'broadcast', tint: '#1E9E52', feature: FEATURE_EMAIL },
+	{ id: 'calls',      label: 'Phone call',       icon: 'call',      tint: '#D97706' },
+	{ id: 'social',     label: 'Social media',     icon: 'social',    tint: '#B83280', feature: FEATURE_SOCIAL },
+	{ id: 'settings',   label: 'Settings',         icon: 'settings',  tint: '#8A6A3B' },
+];
+
+function openDrawer(open) {
+	$('#drawer').classList.toggle('open', open);
+	$('#scrim').classList.toggle('open', open);
+}
+
+function renderDrawer() {
+	const list = $('#navList');
+	list.innerHTML = '';
+	const pending = state.conversations.filter((c) => c.status === 'pending').length;
+	const unread = state.conversations.reduce((sum, c) => sum + (c.unread > 0 ? 1 : 0), 0);
+
+	for (const page of PAGES) {
+		const btn = el('button', 'nav-item' + (state.page === page.id ? ' active' : ''));
+		const tile = el('span', 'nav-tile');
+		tile.style.background = page.tint;
+		tile.innerHTML = ICONS[page.icon] || ICONS.chat;
+		btn.appendChild(tile);
+		btn.appendChild(el('span', null, page.label));
+		const count = page.id === 'chats' ? unread + pending : 0;
+		if (count > 0) btn.appendChild(el('span', 'nav-badge', String(count)));
+		btn.onclick = () => {
+			showPage(page.id);
+			openDrawer(false);
+		};
+		list.appendChild(btn);
+	}
+
+	const name = (state.tenant && (state.tenant.companyName || state.tenant.ownerName)) || 'Workspace';
+	$('#whoName').textContent = name;
+	$('#whoMail').textContent = (state.tenant && state.tenant.email) || 'Paired browser';
+	$('#whoAvatar').textContent = name.slice(0, 1).toUpperCase();
+}
+
+function showPage(id) {
+	state.page = id;
+	const page = PAGES.find((p) => p.id === id) || PAGES[0];
+	$('#pageTitle').textContent = page.label;
+	for (const node of document.querySelectorAll('.page')) node.classList.remove('active');
+	$('#page-' + id).classList.add('active');
+	renderDrawer();
+
+	if (id === 'chats') renderInbox();
+	if (id === 'emails') renderEmails();
+	if (id === 'automation') renderAutomation();
+	if (id === 'calls') renderCalls();
+	if (id === 'social') renderSocial();
+	if (id === 'settings') renderSettings();
+}
+
+// ==========================================================================
+// Chats page
+// ==========================================================================
+const FILTERS = ['All', 'Pending', 'Assigned', 'Unassigned', 'Closed'];
+
+function matchesFilter(convo) {
+	switch (state.filter) {
+		case 'Pending': return convo.status === 'pending';
+		case 'Assigned': return !!convo.assignedAgentUid && convo.status !== 'closed';
+		case 'Unassigned': return !convo.assignedAgentUid && convo.status !== 'closed';
+		case 'Closed': return convo.status === 'closed';
+		default: return true;
+	}
+}
+
+function renderChips() {
+	const host = $('#chips');
+	host.innerHTML = '';
+	for (const f of FILTERS) {
+		const btn = el('button', 'chip-btn' + (state.filter === f ? ' on' : ''), f);
+		btn.onclick = () => {
+			state.filter = f;
+			renderInbox();
+		};
+		host.appendChild(btn);
+	}
+}
+
+function renderInbox() {
+	renderChips();
+	const host = $('#convList');
+	host.innerHTML = '';
+	const needle = state.search.trim().toLowerCase();
+	const rows = state.conversations.filter((c) => {
+		if (!matchesFilter(c)) return false;
+		if (!needle) return true;
+		return (c.name + ' ' + c.email + ' ' + c.lastText).toLowerCase().includes(needle);
+	});
+
+	if (rows.length === 0) {
+		host.appendChild(emptyState('chat', 'Nothing here', 'No conversations match this filter.'));
+		return;
+	}
+
+	for (const convo of rows) {
+		const btn = el('button', 'conv' + (state.openId === convo.id ? ' on' : ''));
+		const av = el('span', 'conv-av', convo.name.slice(0, 1).toUpperCase());
+		av.style.background = avatarFor(convo.id);
+		btn.appendChild(av);
+
+		const body = el('span', 'conv-body');
+		const line1 = el('span', 'conv-line1');
+		line1.appendChild(el('b', null, convo.name));
+		line1.appendChild(el('span', 'conv-time', timeLabel(convo.lastAt)));
+		body.appendChild(line1);
+
+		const line2 = el('span', 'conv-line2');
+		const prefix = convo.lastSender === 'agent' ? 'You: ' : '';
+		line2.appendChild(el('span', 'conv-prev', prefix + (convo.lastText || 'No messages yet')));
+		if (convo.status === 'pending') line2.appendChild(el('span', 'tag pending', 'Pending'));
+		else if (convo.status === 'closed') line2.appendChild(el('span', 'tag closed', 'Closed'));
+		if (convo.unread > 0) line2.appendChild(el('span', 'unread', String(convo.unread)));
+		body.appendChild(line2);
+
+		btn.appendChild(body);
+		btn.onclick = () => openConversation(convo.id);
+		host.appendChild(btn);
+	}
+}
+
+function openConversation(id) {
+	state.openId = id;
+	$('#page-chats').classList.add('viewing');
+	renderInbox();
+	renderThread();
+	watchMessages(id);
+}
+
+function currentConvo() {
+	return state.conversations.find((c) => c.id === state.openId) || null;
+}
+
+function renderThread() {
+	const convo = currentConvo();
+	const head = $('#threadHead');
+	const msgs = $('#msgs');
+	const foot = $('#threadFoot');
+
+	if (!convo) {
+		head.innerHTML = '';
+		foot.innerHTML = '';
+		msgs.innerHTML = '';
+		msgs.appendChild(emptyState('chat', 'Pick a conversation', 'Choose a thread on the left to read it here.'));
+		return;
+	}
+
+	// -------- header
+	head.innerHTML = '';
+	const back = el('button', 'icon-btn');
+	back.innerHTML = ICONS.back;
+	back.onclick = () => {
+		state.openId = null;
+		$('#page-chats').classList.remove('viewing');
+		if (state.unsubMsgs) state.unsubMsgs();
+		renderInbox();
+		renderThread();
+	};
+	head.appendChild(back);
+
+	const who = el('button', 'thread-who');
+	const av = el('span', 'conv-av', convo.name.slice(0, 1).toUpperCase());
+	av.style.background = avatarFor(convo.id);
+	who.appendChild(av);
+	const text = el('span');
+	text.appendChild(el('b', null, convo.name));
+	text.appendChild(el('span', null, convo.email || convo.pageUrl || 'Website visitor'));
+	who.appendChild(text);
+	who.onclick = () => showProfile(convo);
+	head.appendChild(who);
+
+	if (convo.status !== 'closed') {
+		const close = el('button', 'icon-btn');
+		close.innerHTML = ICONS.closeTicket;
+		close.title = 'Close conversation';
+		close.onclick = () => setStatusOf(convo.id, 'closed');
+		head.appendChild(close);
+	}
+
+	// -------- messages
+	const atBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 90;
+	msgs.innerHTML = '';
+	let lastDay = '';
+	for (const m of state.messages) {
+		const day = dayLabel(m.createdAt);
+		if (day !== lastDay) {
+			msgs.appendChild(el('div', 'daystamp', day));
+			lastDay = day;
+		}
+		if (m.sender === 'system') {
+			msgs.appendChild(el('div', 'sysline', m.text));
+			continue;
+		}
+		const out = m.sender === 'agent';
+		const wrap = el('div', 'msg-wrap' + (out ? ' out' : ''));
+		const bubble = el('div', 'bubble');
+		const meta = el('span', 'meta');
+		meta.appendChild(el('span', null, new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })));
+		if (!out) {
+			// Ticks on the visitor's messages show whether THIS side has read them, which is the
+			// same readAt the phone writes.
+			const ticks = el('span', 'ticks' + (m.readAt ? ' seen' : ''));
+			ticks.innerHTML = m.readAt ? ICONS.checkDouble : ICONS.check;
+			meta.appendChild(ticks);
+		}
+		bubble.appendChild(meta);
+		bubble.appendChild(document.createTextNode(m.text));
+		wrap.appendChild(bubble);
+		msgs.appendChild(wrap);
+	}
+	if (state.messages.length === 0) {
+		msgs.appendChild(emptyState('chat', 'No messages yet', 'Nothing has been said in this thread.'));
+	}
+	if (atBottom) requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+
+	// -------- composer
+	foot.innerHTML = '';
+	if (convo.status === 'pending') {
+		const bar = el('div', 'startbar');
+		const btn = el('button', 'btn', 'Start chat');
+		btn.onclick = () => setStatusOf(convo.id, 'open');
+		bar.appendChild(btn);
+		foot.appendChild(bar);
+		return;
+	}
+	if (convo.status === 'closed') {
+		const bar = el('div', 'startbar');
+		bar.appendChild(el('span', 'conn-pill', 'This conversation is closed'));
+		foot.appendChild(bar);
+		return;
+	}
+
+	const composer = el('div', 'composer');
+	const box = el('textarea');
+	box.rows = 1;
+	box.placeholder = 'Message';
+	const send = el('button', 'send-btn');
+	send.innerHTML = ICONS.send;
+	send.disabled = true;
+
+	const autoGrow = () => {
+		box.style.height = 'auto';
+		box.style.height = Math.min(box.scrollHeight, 132) + 'px';
+		send.disabled = box.value.trim().length === 0;
+	};
+	const fire = () => {
+		const body = box.value;
+		if (!body.trim()) return;
+		// Clear FIRST. Waiting for the write to land is what made the app feel laggy.
+		box.value = '';
+		autoGrow();
+		sendMessage(body);
+	};
+	box.oninput = autoGrow;
+	box.onkeydown = (e) => {
+		if (e.key === 'Enter' && !e.shiftKey) {
+			e.preventDefault();
+			fire();
+		}
+	};
+	send.onclick = fire;
+	composer.appendChild(box);
+	composer.appendChild(send);
+	foot.appendChild(composer);
+}
+
+function showProfile(convo) {
+	const rows = [
+		['Name', convo.name],
+		['Email', convo.email || 'Not provided'],
+		['Status', convo.status],
+		['First seen', convo.createdAt ? new Date(convo.createdAt).toLocaleString() : 'Unknown'],
+		['Last activity', convo.lastAt ? new Date(convo.lastAt).toLocaleString() : 'Unknown'],
+		['Page', convo.pageUrl || 'Unknown'],
+		['Country', convo.country || 'Unknown'],
+		['Browser', convo.userAgent || 'Unknown'],
+	];
+	const body = rows
+		.map(([k, v]) => `<div class="row"><div class="row-main"><b>${escapeHtml(k)}</b></div><div class="row-val">${escapeHtml(v)}</div></div>`)
+		.join('');
+	openSheet(convo.name, `<div class="card">${body}</div>`);
+}
+
+// ==========================================================================
+// A very small modal, used by the profile view and confirmations
+// ==========================================================================
+function openSheet(title, html) {
+	const scrim = el('div', 'scrim open');
+	scrim.style.zIndex = '70';
+	const panel = el('div', 'card');
+	panel.style.cssText =
+		'position:fixed;z-index:71;top:50%;left:50%;transform:translate(-50%,-50%);width:min(520px,92vw);max-height:82vh;overflow:auto;';
+	panel.innerHTML = `<div class="card-title" style="padding:20px 20px 10px">${escapeHtml(title)}</div>${html}<div style="padding:16px 20px 20px;text-align:right"><button class="btn ghost sm" id="sheetClose">Close</button></div>`;
+	document.body.appendChild(scrim);
+	document.body.appendChild(panel);
+	const shut = () => {
+		scrim.remove();
+		panel.remove();
+	};
+	scrim.onclick = shut;
+	panel.querySelector('#sheetClose').onclick = shut;
+	return shut;
+}
+
+function emptyState(icon, title, message) {
+	const node = el('div', 'empty');
+	const chip = el('div', 'chip');
+	chip.innerHTML = ICONS[icon] || ICONS.chat;
+	node.appendChild(chip);
+	node.appendChild(el('b', null, title));
+	node.appendChild(el('span', null, message));
+	return node;
+}
+
+function gate(feature, label) {
+	const features = (state.tenant && state.tenant.features) || [];
+	if (features.includes('*') || features.includes(feature)) return null;
+	const node = el('div', 'wrap');
+	const card = el('div', 'card');
+	card.appendChild(emptyState('card', label + ' is not in your plan', 'Upgrade to unlock this section. Your current plan does not include it.'));
+	const foot = el('div', 'note');
+	const btn = el('button', 'btn sm', 'See plans');
+	btn.onclick = () => showPage('subscription');
+	foot.appendChild(btn);
+	card.appendChild(foot);
+	node.appendChild(card);
+	return node;
+}
+
+// ==========================================================================
+// Remaining pages
+// ==========================================================================
+async function renderEmails() {
+	const host = $('#page-emails');
+	const blocked = gate(FEATURE_EMAIL, 'Emails');
+	if (blocked) {
+		host.innerHTML = '';
+		host.appendChild(blocked);
+		return;
+	}
+	host.innerHTML = '<div class="wrap"><div class="card"><div class="card-title">Captured emails</div><div id="leadRows"></div></div></div>';
+	await loadLeads();
+	const rows = $('#leadRows');
+	rows.innerHTML = '';
+	if (state.leads.length === 0) {
+		rows.appendChild(emptyState('mail', 'No emails yet', 'Addresses visitors enter in the widget appear here.'));
+		return;
+	}
+	for (const lead of state.leads) {
+		const row = el('div', 'row');
+		const tile = el('span', 'row-tile');
+		tile.style.background = '#0E8F86';
+		tile.innerHTML = ICONS.mail;
+		row.appendChild(tile);
+		const main = el('div', 'row-main');
+		main.appendChild(el('b', null, lead.email));
+		main.appendChild(el('span', null,
+			`${lead.conversationCount || 0} conversation(s)` +
+			(lead.emailVerified ? ' · verified' : '')));
+		row.appendChild(main);
+		row.appendChild(el('div', 'row-val', lead.source || 'manual'));
+		rows.appendChild(row);
+	}
+}
+
+async function loadLeads() {
+	try {
+		const snap = await getDocs(collection(fs, 'tenants', state.tenantId, 'leads'));
+		state.leads = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+	} catch (err) {
+		state.leads = [];
+	}
+}
+
+async function renderAutomation() {
+	const host = $('#page-automation');
+	const blocked = gate(FEATURE_EMAIL, 'Email automation');
+	if (blocked) {
+		host.innerHTML = '';
+		host.appendChild(blocked);
+		return;
+	}
+	host.innerHTML =
+		'<div class="wrap"><div class="card"><div class="card-title">Templates</div><div id="tplRows"></div>' +
+		'<div class="note">Templates are shared with the app. Editing one here changes it everywhere.</div></div></div>';
+	try {
+		const snap = await getDocs(collection(fs, 'tenants', state.tenantId, 'emailTemplates'));
+		state.templates = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+	} catch (err) {
+		state.templates = [];
+	}
+	const rows = $('#tplRows');
+	rows.innerHTML = '';
+	if (state.templates.length === 0) {
+		rows.appendChild(emptyState('broadcast', 'No templates', 'Seed the catalogue or add templates from the app.'));
+		return;
+	}
+	for (const tpl of state.templates) {
+		const row = el('div', 'row');
+		const tile = el('span', 'row-tile');
+		tile.style.background = '#1E9E52';
+		tile.innerHTML = ICONS.broadcast;
+		row.appendChild(tile);
+		const main = el('div', 'row-main');
+		main.appendChild(el('b', null, tpl.name || tpl.id));
+		main.appendChild(el('span', null, tpl.subject || 'No subject'));
+		row.appendChild(main);
+		const edit = el('button', 'btn ghost sm', 'Edit');
+		edit.onclick = () => editTemplate(tpl);
+		row.appendChild(edit);
+		rows.appendChild(row);
+	}
+}
+
+function editTemplate(tpl) {
+	const html =
+		'<div style="padding:6px 20px 4px"><input class="field" id="tplSubject" placeholder="Subject" value="' +
+		escapeHtml(tpl.subject || '') +
+		'"></div><div style="padding:10px 20px 4px"><textarea class="field" id="tplBody" placeholder="Body">' +
+		escapeHtml(tpl.body || '') +
+		'</textarea></div><div style="padding:10px 20px 0"><button class="btn sm" id="tplSave">Save template</button></div>';
+	const shut = openSheet(tpl.name || tpl.id, html);
+	document.querySelector('#tplSave').onclick = async () => {
+		try {
+			await setDoc(
+				doc(fs, 'tenants', state.tenantId, 'emailTemplates', tpl.id),
+				{
+					...tpl,
+					subject: document.querySelector('#tplSubject').value,
+					body: document.querySelector('#tplBody').value,
+				},
+				{ merge: true },
+			);
+			toast('Template saved.');
+			shut();
+			renderAutomation();
+		} catch (err) {
+			toast('Could not save that template.');
+		}
+	};
+}
+
+function renderCalls() {
+	const host = $('#page-calls');
+	host.innerHTML = '';
+	const wrap = el('div', 'wrap');
+	const card = el('div', 'card');
+	card.appendChild(emptyState('call', 'Phone call', 'Call features are managed in the app. Use the app to initiate or receive calls from visitors.'));
+	wrap.appendChild(card);
+	host.appendChild(wrap);
+}
+
+function renderSocial() {
+	const host = $('#page-social');
+	const blocked = gate(FEATURE_SOCIAL, 'Social media');
+	host.innerHTML = '';
+	if (blocked) {
+		host.appendChild(blocked);
+		return;
+	}
+	const wrap = el('div', 'wrap');
+	const card = el('div', 'card');
+	card.appendChild(emptyState('social', 'Social inboxes', 'Channel connections are managed in the app. Nothing is connected yet.'));
+	wrap.appendChild(card);
+	host.appendChild(wrap);
+}
+
+async function renderContacts() {
+	const host = $('#page-contacts');
+	host.innerHTML = '<div class="wrap"><div class="grid2" id="contactStats"></div><div class="card"><div class="card-title">People who have written in</div><div id="contactRows"></div></div></div>';
+	await loadLeads();
+
+	const stats = $('#contactStats');
+	const withEmail = state.conversations.filter((c) => c.email).length;
+	const pairs = [
+		[state.conversations.length, 'Conversations'],
+		[state.leads.length, 'Captured emails'],
+		[withEmail, 'Identified visitors'],
+		[state.conversations.filter((c) => c.status === 'pending').length, 'Waiting for a reply'],
+	];
+	for (const [value, label] of pairs) {
+		const node = el('div', 'stat');
+		node.appendChild(el('b', null, String(value)));
+		node.appendChild(el('span', null, label));
+		stats.appendChild(node);
+	}
+
+	const rows = $('#contactRows');
+	const seen = new Map();
+	for (const c of state.conversations) {
+		const key = c.email || c.id;
+		if (!seen.has(key)) seen.set(key, c);
+	}
+	if (seen.size === 0) {
+		rows.appendChild(emptyState('person', 'No contacts', 'Visitors appear here once they start a chat.'));
+		return;
+	}
+	for (const convo of seen.values()) {
+		const row = el('div', 'row');
+		const av = el('span', 'conv-av', convo.name.slice(0, 1).toUpperCase());
+		av.style.cssText = 'width:38px;height:38px;font-size:14px;background:' + avatarFor(convo.id);
+		row.appendChild(av);
+		const main = el('div', 'row-main');
+		main.appendChild(el('b', null, convo.name));
+		main.appendChild(el('span', null, convo.email || 'No email given'));
+		row.appendChild(main);
+		const open = el('button', 'btn ghost sm', 'Open chat');
+		open.onclick = () => {
+			showPage('chats');
+			openConversation(convo.id);
+		};
+		row.appendChild(open);
+		rows.appendChild(row);
+	}
+}
+
+function renderAccount() {
+	const t = state.tenant || {};
+	const rows = [
+		['Owner name', t.ownerName || '—', 'person', '#1D6FE0'],
+		['Owner email', t.email || '—', 'mail', '#0E8F86'],
+		['Company', t.companyName || '—', 'globe', '#3F3FBF'],
+		['Phone', t.phone || '—', 'call', '#1E9E52'],
+		['Workspace id', state.tenantId, 'database', '#5B3A72'],
+		['Status', t.status || (t.active === false ? 'inactive' : 'active'), 'shield', '#8A6A3B'],
+	];
+	let html = '<div class="wrap"><div class="card"><div class="card-title">Account</div>';
+	for (const [label, value, icon, tint] of rows) {
+		html +=
+			`<div class="row"><span class="row-tile" style="background:${tint}">${ICONS[icon] || ICONS.person}</span>` +
+			`<div class="row-main"><b>${escapeHtml(label)}</b></div>` +
+			`<div class="row-val">${escapeHtml(value)}</div></div>`;
+	}
+	html += '<div class="note">Account details are edited in the app. This browser shows them read-only.</div></div></div>';
+	$('#page-account').innerHTML = html;
+}
+
+function renderWebsite() {
+	const w = state.website;
+	let html = '<div class="wrap"><div class="card"><div class="card-title">Linked website</div>';
+	if (w) {
+		html +=
+			`<div class="row"><span class="row-tile" style="background:#0E8F86">${ICONS.globe}</span>` +
+			`<div class="row-main"><b>${escapeHtml(w.domain || 'Unknown domain')}</b>` +
+			`<span>${w.active ? 'Active' : 'Inactive'}</span></div></div>`;
+		html += `<div class="row"><div class="row-main"><b>Website id</b></div><div class="row-val">${escapeHtml(w.id)}</div></div>`;
+	} else {
+		html += '<div class="empty"><b>No website linked</b><span>Generate a link code in the app, then paste it into the WordPress plugin.</span></div>';
+	}
+	html +=
+		'<div class="note">Link codes are generated in the app only. A code is eight characters, valid for ten ' +
+		'minutes, and can be used once.</div></div></div>';
+	$('#page-website').innerHTML = html;
+}
+
+async function renderSubscription() {
+	const host = $('#page-subscription');
+	host.innerHTML = '<div class="wrap"><div id="planList"></div></div>';
+	if (state.plans.length === 0) {
+		try {
+			const snap = await getDocs(fsQuery(collection(fs, 'plans'), orderBy('tier')));
+			state.plans = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+		} catch (err) {
+			state.plans = [];
+		}
+	}
+	const list = $('#planList');
+	if (state.plans.length === 0) {
+		const card = el('div', 'card');
+		card.appendChild(emptyState('card', 'No plans available', 'The plan catalogue is empty. Run the seeder against Firestore and reload.'));
+		list.appendChild(card);
+		return;
+	}
+	const currentId = (state.tenant && state.tenant.planId) || '';
+	for (const plan of state.plans) {
+		const card = el('div', 'plan' + (plan.id === currentId ? ' current' : ''));
+		card.appendChild(el('h3', null, plan.name || plan.id));
+		const price = el('div', 'price');
+		price.textContent = '$' + Math.round((plan.priceCents || 0) / 100);
+		price.appendChild(el('small', null, ' / month'));
+		card.appendChild(price);
+		const ul = el('ul');
+		for (const feature of plan.features || []) {
+			const li = el('li');
+			const tick = el('span');
+			tick.innerHTML = ICONS.check;
+			li.appendChild(tick);
+			li.appendChild(el('span', null, feature === '*' ? 'Calling agent' : feature.replace(/_/g, ' ')));
+			ul.appendChild(li);
+		}
+		card.appendChild(ul);
+		const btn = el('button', 'btn', plan.id === currentId ? 'Current plan' : 'Subscribe');
+		btn.disabled = plan.id === currentId;
+		btn.onclick = () => toast('Subscriptions are completed in the app.');
+		card.appendChild(btn);
+		list.appendChild(card);
+	}
+}
+
+function renderStorage() {
+	const html =
+		'<div class="wrap">' +
+		'<div class="card"><div class="card-title">This browser</div>' +
+		`<div class="row"><span class="row-tile" style="background:#1D6FE0">${ICONS.database}</span>` +
+		'<div class="row-main"><b>Paired session</b><span id="sessUid"></span></div></div>' +
+		`<div class="row"><span class="row-tile" style="background:#D97706">${ICONS.sweep}</span>` +
+		'<div class="row-main"><b>Clear local cache</b><span>Removes the saved pairing from this browser only.</span></div>' +
+		'<button class="btn ghost sm" id="clearLocal">Clear</button></div>' +
+		`<div class="row"><span class="row-tile" style="background:#C2372F">${ICONS.power}</span>` +
+		'<div class="row-main"><b>Log out of this browser</b><span>Revokes the grant so this browser has to scan a new QR.</span></div>' +
+		'<button class="btn danger sm" id="revoke">Log out</button></div></div>' +
+		'<div class="card"><div class="card-title">Where your data lives</div>' +
+		'<div class="note">Conversations and messages sit in the Realtime Database and are purged 24 hours ' +
+		'after the last activity unless a thread is kept. Everything durable — the account, captured ' +
+		'emails, templates and the linked website — lives in Firestore and is never purged automatically. ' +
+		'Deleting the workspace is done from the Firebase console.</div></div></div>';
+	$('#page-storage').innerHTML = html;
+	$('#sessUid').textContent = state.uid || '';
+	$('#clearLocal').onclick = () => {
+		storeSession(null);
+		toast('Local cache cleared.');
+	};
+	$('#revoke').onclick = async () => {
+		try {
+			await dbRemove(ref(db, `chats/${state.tenantId}/sessions/${state.uid}`));
+		} catch (err) {
+			/* the owner may have revoked it already */
+		}
+		storeSession(null);
+		window.location.reload();
+	};
+}
+
+function renderSettings() {
+	const dark = document.documentElement.dataset.theme === 'dark';
+	const html =
+		'<div class="wrap"><div class="card"><div class="card-title">Appearance</div>' +
+		`<div class="row"><span class="row-tile" style="background:#3F3FBF">${ICONS.moon}</span>` +
+		'<div class="row-main"><b>Dark mode</b><span>Follows this browser only.</span></div>' +
+		`<button class="switch${dark ? ' on' : ''}" id="darkToggle"></button></div>` +
+		`<div class="row"><span class="row-tile" style="background:#1E9E52">${ICONS.bell}</span>` +
+		'<div class="row-main"><b>Desktop notifications</b><span>Alerts when a new visitor asks for support.</span></div>' +
+		`<button class="switch${Notification.permission === 'granted' ? ' on' : ''}" id="notifToggle"></button></div></div>` +
+		'<div class="card"><div class="card-title">Widget</div>' +
+		'<div class="note">The widget’s colours, header title and automated replies are configured in the ' +
+		'WordPress plugin under Settings → Support Chat. They are not editable from here.</div></div></div>';
+	$('#page-settings').innerHTML = html;
+
+	$('#darkToggle').onclick = (e) => {
+		const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+		applyTheme(next);
+		e.currentTarget.classList.toggle('on', next === 'dark');
+	};
+	$('#notifToggle').onclick = async (e) => {
+		if (Notification.permission === 'granted') {
+			toast('Turn notifications off in your browser’s site settings.');
+			return;
+		}
+		const result = await Notification.requestPermission();
+		e.currentTarget.classList.toggle('on', result === 'granted');
+	};
+}
+
+function renderHelp() {
+	$('#page-help').innerHTML =
+		'<div class="wrap"><div class="card"><div class="card-title">Help and contact</div>' +
+		`<div class="row"><span class="row-tile" style="background:#0E8F86">${ICONS.mail}</span>` +
+		'<div class="row-main"><b>info@keykraftt.com</b><span>Support inbox</span></div></div>' +
+		`<div class="row"><span class="row-tile" style="background:#1D6FE0">${ICONS.globe}</span>` +
+		'<div class="row-main"><b>keykraftt.com</b><span>Website</span></div></div>' +
+		'<div class="note">This browser is paired to your workspace. To sign it out, open Storage and data ' +
+		'and choose Log out, or remove the session from the app.</div></div></div>';
+}
+
+// ==========================================================================
+// Desktop notifications for newly pending threads
+// ==========================================================================
+let knownPending = null;
+function notifyPending() {
+	const pending = new Set(state.conversations.filter((c) => c.status === 'pending').map((c) => c.id));
+	if (knownPending === null) {
+		knownPending = pending;
+		return;
+	}
+	for (const id of pending) {
+		if (!knownPending.has(id) && Notification.permission === 'granted') {
+			const convo = state.conversations.find((c) => c.id === id);
+			new Notification('Someone wants to talk to support', {
+				body: (convo && convo.lastText) || 'A visitor is waiting.',
+			});
+		}
+	}
+	knownPending = pending;
+}
+
+// ==========================================================================
+// Boot
+// ==========================================================================
+async function boot() {
+	applyTheme();
+
+	$('#hamburger').onclick = () => openDrawer(true);
+	$('#scrim').onclick = () => openDrawer(false);
+	$('#searchBox').oninput = (e) => {
+		state.search = e.target.value;
+		renderInbox();
+	};
+	document.addEventListener('keydown', (e) => {
+		if (e.key === 'Escape') openDrawer(false);
+	});
+
+	try {
+		app = initializeApp(FIREBASE_CONFIG);
+		auth = getAuth(app);
+		db = getDatabase(app);
+		fs = getFirestore(app);
+	} catch (err) {
+		setStatus('Could not reach Firebase. Check the config in console.js.', 'err');
+		return;
+	}
+
+	onAuthStateChanged(auth, async (user) => {
+		if (!user) return;
+		state.uid = user.uid;
+		const resumed = await resumeSession();
+		if (!resumed) {
+			try {
+				await beginPairing();
+			} catch (err) {
+				setStatus(
+					'Could not start a pairing session. Make sure Anonymous sign-in is enabled in Firebase Auth.',
+					'err',
+				);
+			}
+		}
+	});
+
+	try {
+		await signInAnonymously(auth);
+	} catch (err) {
+		setStatus(
+			'Anonymous sign-in is turned off for this Firebase project. Enable it under Authentication → Sign-in method.',
+			'err',
+		);
+	}
+
+	// Redraw relative timestamps and fire notifications on a slow tick.
+	setInterval(() => {
+		notifyPending();
+		if (state.page === 'chats' && !state.openId) renderInbox();
+	}, 30000);
+}
+
+boot();
