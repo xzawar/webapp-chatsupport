@@ -73,6 +73,7 @@ const FEATURE_SOCIAL = 'social_media';
 
 // ------------------------------------------------------------------- state
 const state = {
+	convosLoaded: false,
 	uid: null,
 	tenantId: null,
 	tenant: null,
@@ -150,6 +151,40 @@ function toast(message) {
 		node.classList.add('out');
 		setTimeout(() => node.remove(), 280);
 	}, 3000);
+}
+
+// ------------------------------------------------------------------ avatars
+/*
+ * The app's profile picture rule, in the browser.
+ *
+ * Google photo, then the first letter of the name, then the first letter of the email, then a
+ * question mark. Website visitors have no photo and are all called "Website visitor", so the
+ * letter collides for every one of them; the disc colour is seeded from the conversation id,
+ * which is what actually tells them apart. Same input, same colour, on the phone and here.
+ */
+function avatarLetter(name, email) {
+	const fromName = String(name || '').trim().match(/[a-z0-9]/i);
+	if (fromName) return fromName[0].toUpperCase();
+	const fromEmail = String(email || '').trim().match(/[a-z0-9]/i);
+	if (fromEmail) return fromEmail[0].toUpperCase();
+	return '?';
+}
+
+/** A finished avatar disc: a photo when there is one, the letter when there is not. */
+function avatarNode(cls, convo) {
+	const node = el('span', cls, avatarLetter(convo.name, convo.email));
+	node.style.background = avatarFor(convo.id);
+	if (convo.photoUrl) {
+		const img = document.createElement('img');
+		img.src = convo.photoUrl;
+		img.alt = '';
+		// The letter stays underneath: a photo that never loads must not leave a blank disc.
+		img.style.cssText = 'width:100%;height:100%;border-radius:50%;object-fit:cover;position:absolute;inset:0';
+		img.addEventListener('error', () => img.remove());
+		node.style.position = 'relative';
+		node.appendChild(img);
+	}
+	return node;
 }
 
 function stored() {
@@ -255,11 +290,52 @@ async function resumeSession() {
 }
 
 // ==========================================================================
+// Loading
+// ==========================================================================
+/*
+ * Scanning the QR used to hand straight over to the shell, which meant the first thing a newly
+ * paired browser showed was an empty inbox, a blank workspace name and a drawer with no counts,
+ * all of which filled in a second later. This holds that window shut until the data is here.
+ *
+ * MIN is a floor as much as MAX is a ceiling: a loading screen that disappears in 80ms reads as
+ * a flicker, and MAX exists so a browser that cannot reach the database still reaches the app.
+ */
+const LOAD_MIN_MS = 650;
+const LOAD_MAX_MS = 6000;
+
+function showLoading(on) {
+	const node = $('#loading');
+	if (!node) return;
+	if (on) {
+		node.classList.remove('hidden');
+		node.style.opacity = '1';
+		return;
+	}
+	node.style.transition = 'opacity 260ms ease';
+	node.style.opacity = '0';
+	setTimeout(() => node.classList.add('hidden'), 280);
+}
+
+function untilLoaded() {
+	return new Promise((resolve) => {
+		const startedAt = Date.now();
+		const tick = () => {
+			const waited = Date.now() - startedAt;
+			if (waited >= LOAD_MAX_MS) return resolve();
+			if (state.convosLoaded && waited >= LOAD_MIN_MS) return resolve();
+			setTimeout(tick, 60);
+		};
+		tick();
+	});
+}
+
+// ==========================================================================
 // Console boot
 // ==========================================================================
 async function enterConsole(tenantId) {
 	state.tenantId = tenantId;
 	$('#pairing').classList.add('hidden');
+	showLoading(true);
 	$('#shell').classList.remove('hidden');
 
 	// Keep the grant warm so the phone can show when this browser was last used.
@@ -272,6 +348,12 @@ async function enterConsole(tenantId) {
 	await loadTenant();
 	renderDrawer();
 	showPage(state.page);
+
+	// The shell is built and painted underneath by this point; the reveal is the last thing.
+	await untilLoaded();
+	renderDrawer();
+	if (state.page === 'chats') renderInbox();
+	showLoading(false);
 }
 
 function watchConnection() {
@@ -326,16 +408,20 @@ function watchConversations() {
 					name: visitor.name || 'Website visitor',
 					email: visitor.email || '',
 					pageUrl: visitor.pageUrl || '',
-					country: visitor.country || '',
-					userAgent: visitor.userAgent || '',
 				});
 			});
 			rows.reverse(); // newest first
 			state.conversations = rows;
+			state.convosLoaded = true;
 			if (state.page === 'chats') renderInbox();
 			renderDrawer();
 		},
-		() => toast('Could not read conversations. The pairing may have been revoked.'),
+		() => {
+			// Also mark it loaded on failure, or the loading screen would sit there forever on a
+			// revoked pairing instead of letting the error through.
+			state.convosLoaded = true;
+			toast('Could not read conversations. The pairing may have been revoked.');
+		},
 	);
 }
 
@@ -353,6 +439,11 @@ function watchMessages(conversationId) {
 			rows.push({
 				id: m.key,
 				sender: v.sender || 'visitor',
+				// 'bot' when the reply was automated. Read defensively: the widget currently
+				// keeps bot replies on the visitor's device and never writes them here, so
+				// this is usually absent. It is read so that the console draws them correctly
+				// the moment they do start being persisted.
+				kind: v.kind || v.author || '',
 				text: v.text || '',
 				createdAt: Number(v.createdAt || 0),
 				readAt: v.readAt ? Number(v.readAt) : null,
@@ -466,6 +557,7 @@ const PAGES = [
 	{ id: 'calls',      label: 'Phone call',       icon: 'call',      tint: '#D97706' },
 	{ id: 'social',     label: 'Social media',     icon: 'social',    tint: '#B83280', feature: FEATURE_SOCIAL },
 	{ id: 'settings',   label: 'Settings',         icon: 'settings',  tint: '#8A6A3B' },
+	{ id: 'help',       label: 'Help and contact', icon: 'help',      tint: '#E0A126' },
 ];
 
 function openDrawer(open) {
@@ -498,7 +590,10 @@ function renderDrawer() {
 	const name = (state.tenant && (state.tenant.companyName || state.tenant.ownerName)) || 'Workspace';
 	$('#whoName').textContent = name;
 	$('#whoMail').textContent = (state.tenant && state.tenant.email) || 'Paired browser';
-	$('#whoAvatar').textContent = name.slice(0, 1).toUpperCase();
+	$('#whoAvatar').textContent = avatarLetter(
+		name === 'Workspace' ? '' : name,
+		(state.tenant && state.tenant.email) || '',
+	);
 }
 
 function showPage(id) {
@@ -515,6 +610,7 @@ function showPage(id) {
 	if (id === 'calls') renderCalls();
 	if (id === 'social') renderSocial();
 	if (id === 'settings') renderSettings();
+	if (id === 'help') renderHelp();
 }
 
 // ==========================================================================
@@ -563,9 +659,7 @@ function renderInbox() {
 
 	for (const convo of rows) {
 		const btn = el('button', 'conv' + (state.openId === convo.id ? ' on' : ''));
-		const av = el('span', 'conv-av', convo.name.slice(0, 1).toUpperCase());
-		av.style.background = avatarFor(convo.id);
-		btn.appendChild(av);
+		btn.appendChild(avatarNode('conv-av', convo));
 
 		const body = el('span', 'conv-body');
 		const line1 = el('span', 'conv-line1');
@@ -627,9 +721,7 @@ function renderThread() {
 	head.appendChild(back);
 
 	const who = el('button', 'thread-who');
-	const av = el('span', 'conv-av', convo.name.slice(0, 1).toUpperCase());
-	av.style.background = avatarFor(convo.id);
-	who.appendChild(av);
+	who.appendChild(avatarNode('conv-av', convo));
 	const text = el('span');
 	text.appendChild(el('b', null, convo.name));
 	text.appendChild(el('span', null, convo.email || convo.pageUrl || 'Website visitor'));
@@ -637,7 +729,17 @@ function renderThread() {
 	who.onclick = () => showProfile(convo);
 	head.appendChild(who);
 
-	if (convo.status !== 'closed') {
+	/*
+	 * Both directions. Closing was already here; reopening was not, so a thread closed by
+	 * mistake could only be brought back from the phone. setStatusOf already accepted 'open'.
+	 */
+	if (convo.status === 'closed') {
+		const reopen = el('button', 'icon-btn');
+		reopen.innerHTML = ICONS.reopenTicket;
+		reopen.title = 'Reopen conversation';
+		reopen.onclick = () => setStatusOf(convo.id, 'open');
+		head.appendChild(reopen);
+	} else {
 		const close = el('button', 'icon-btn');
 		close.innerHTML = ICONS.closeTicket;
 		close.title = 'Close conversation';
@@ -661,18 +763,14 @@ function renderThread() {
 		}
 		const out = m.sender === 'agent';
 		const wrap = el('div', 'msg-wrap' + (out ? ' out' : ''));
+		if (!out) wrap.appendChild(msgAvatar(m, convo));
 		const bubble = el('div', 'bubble');
-		const meta = el('span', 'meta');
-		meta.appendChild(el('span', null, new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })));
-		if (!out) {
-			// Ticks on the visitor's messages show whether THIS side has read them, which is the
-			// same readAt the phone writes.
-			const ticks = el('span', 'ticks' + (m.readAt ? ' seen' : ''));
-			ticks.innerHTML = m.readAt ? ICONS.checkDouble : ICONS.check;
-			meta.appendChild(ticks);
-		}
+		// No read receipts. The app does not draw them in a bubble, so neither does this.
+		const meta = el('span', 'meta', new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+		// Text first, timestamp second. The old order relied on a float and short messages wrapped
+		// themselves around it.
+		bubble.appendChild(el('span', 'txt', m.text));
 		bubble.appendChild(meta);
-		bubble.appendChild(document.createTextNode(m.text));
 		wrap.appendChild(bubble);
 		msgs.appendChild(wrap);
 	}
@@ -732,6 +830,24 @@ function renderThread() {
 	foot.appendChild(composer);
 }
 
+/**
+ * The disc beside an incoming message in the thread.
+ *
+ * From the reference screenshots: the visitor's own picture on their messages, and a flat accent
+ * disc with a chat glyph on automated ones. Outgoing agent messages get nothing, because the
+ * person reading this screen does not need to be told which messages are theirs.
+ */
+function msgAvatar(message, convo) {
+	if (message.kind === 'bot') {
+		const bot = el('span', 'msg-av bot');
+		bot.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.4c-4.3 0-7.8 ' +
+			'2.9-7.8 6.5 0 2 1.1 3.8 2.8 5l-.8 3.1a.5.5 0 0 0 .74.55l3.2-1.8c.6.1 1.2.15 1.86.15 ' +
+			'4.3 0 7.8-2.9 7.8-6.5S16.3 4.4 12 4.4Z"/></svg>';
+		return bot;
+	}
+	return avatarNode('msg-av', convo);
+}
+
 function showProfile(convo) {
 	const rows = [
 		['Name', convo.name],
@@ -740,8 +856,6 @@ function showProfile(convo) {
 		['First seen', convo.createdAt ? new Date(convo.createdAt).toLocaleString() : 'Unknown'],
 		['Last activity', convo.lastAt ? new Date(convo.lastAt).toLocaleString() : 'Unknown'],
 		['Page', convo.pageUrl || 'Unknown'],
-		['Country', convo.country || 'Unknown'],
-		['Browser', convo.userAgent || 'Unknown'],
 	];
 	const body = rows
 		.map(([k, v]) => `<div class="row"><div class="row-main"><b>${escapeHtml(k)}</b></div><div class="row-val">${escapeHtml(v)}</div></div>`)
@@ -787,8 +901,11 @@ function gate(feature, label) {
 	const card = el('div', 'card');
 	card.appendChild(emptyState('card', label + ' is not in your plan', 'Upgrade to unlock this section. Your current plan does not include it.'));
 	const foot = el('div', 'note');
-	const btn = el('button', 'btn sm', 'See plans');
-	btn.onclick = () => showPage('subscription');
+	// Plans are bought in the app. This browser never had a working subscription page - the
+	// function that drew one wrote into a section index.html does not contain - so it says so
+	// rather than navigating into nothing.
+	const btn = el('button', 'btn sm', 'How to upgrade');
+	btn.onclick = () => toast('Open Support Chat on your phone, then Settings \u2192 Subscription.');
 	foot.appendChild(btn);
 	card.appendChild(foot);
 	node.appendChild(card);
@@ -933,200 +1050,124 @@ function renderSocial() {
 	host.appendChild(wrap);
 }
 
-async function renderContacts() {
-	const host = $('#page-contacts');
-	host.innerHTML = '<div class="wrap"><div class="grid2" id="contactStats"></div><div class="card"><div class="card-title">People who have written in</div><div id="contactRows"></div></div></div>';
-	await loadLeads();
 
-	const stats = $('#contactStats');
-	const withEmail = state.conversations.filter((c) => c.email).length;
-	const pairs = [
-		[state.conversations.length, 'Conversations'],
-		[state.leads.length, 'Captured emails'],
-		[withEmail, 'Identified visitors'],
-		[state.conversations.filter((c) => c.status === 'pending').length, 'Waiting for a reply'],
-	];
-	for (const [value, label] of pairs) {
-		const node = el('div', 'stat');
-		node.appendChild(el('b', null, String(value)));
-		node.appendChild(el('span', null, label));
-		stats.appendChild(node);
-	}
+/*
+ * Settings, rebuilt to the app's Settings screen.
+ *
+ * The browser used to show two toggles and a note. The phone shows eleven rows in four named
+ * sections, each with its own coloured tile, and the two screens did not look related.
+ *
+ * The sections, the order, the wording and the tile colours below are taken from
+ * SettingsScreen.kt. Rows that cannot act in a browser are still drawn, because leaving them out
+ * is what made this screen look like a different product - but they are marked `app` and say so
+ * when pressed, rather than pretending to work. Nothing has been added that the app does not
+ * have: no App icon row, no Emails row.
+ */
+const SETTING_TINTS = {
+	blue: '#1677FF', teal: '#00A89D', green: '#16A34A', orange: '#F97316',
+	red: '#EF4444', indigo: '#6366F1', purple: '#8B5CF6', pink: '#EC4899',
+	bronze: '#E0A126', plum: '#7C3AED',
+};
 
-	const rows = $('#contactRows');
-	const seen = new Map();
-	for (const c of state.conversations) {
-		const key = c.email || c.id;
-		if (!seen.has(key)) seen.set(key, c);
-	}
-	if (seen.size === 0) {
-		rows.appendChild(emptyState('person', 'No contacts', 'Visitors appear here once they start a chat.'));
-		return;
-	}
-	for (const convo of seen.values()) {
-		const row = el('div', 'row');
-		const av = el('span', 'conv-av', convo.name.slice(0, 1).toUpperCase());
-		av.style.cssText = 'width:38px;height:38px;font-size:14px;background:' + avatarFor(convo.id);
-		row.appendChild(av);
-		const main = el('div', 'row-main');
-		main.appendChild(el('b', null, convo.name));
-		main.appendChild(el('span', null, convo.email || 'No email given'));
-		row.appendChild(main);
-		const open = el('button', 'btn ghost sm', 'Open chat');
-		open.onclick = () => {
-			showPage('chats');
-			openConversation(convo.id);
-		};
-		row.appendChild(open);
-		rows.appendChild(row);
-	}
-}
-
-function renderAccount() {
-	const t = state.tenant || {};
-	const rows = [
-		['Owner name', t.ownerName || '—', 'person', '#1D6FE0'],
-		['Owner email', t.email || '—', 'mail', '#0E8F86'],
-		['Company', t.companyName || '—', 'globe', '#3F3FBF'],
-		['Phone', t.phone || '—', 'call', '#1E9E52'],
-		['Workspace id', state.tenantId, 'database', '#5B3A72'],
-		['Status', t.status || (t.active === false ? 'inactive' : 'active'), 'shield', '#8A6A3B'],
-	];
-	let html = '<div class="wrap"><div class="card"><div class="card-title">Account</div>';
-	for (const [label, value, icon, tint] of rows) {
-		html +=
-			`<div class="row"><span class="row-tile" style="background:${tint}">${ICONS[icon] || ICONS.person}</span>` +
-			`<div class="row-main"><b>${escapeHtml(label)}</b></div>` +
-			`<div class="row-val">${escapeHtml(value)}</div></div>`;
-	}
-	html += '<div class="note">Account details are edited in the app. This browser shows them read-only.</div></div></div>';
-	$('#page-account').innerHTML = html;
-}
-
-function renderWebsite() {
-	const w = state.website;
-	let html = '<div class="wrap"><div class="card"><div class="card-title">Linked website</div>';
-	if (w) {
-		html +=
-			`<div class="row"><span class="row-tile" style="background:#0E8F86">${ICONS.globe}</span>` +
-			`<div class="row-main"><b>${escapeHtml(w.domain || 'Unknown domain')}</b>` +
-			`<span>${w.active ? 'Active' : 'Inactive'}</span></div></div>`;
-		html += `<div class="row"><div class="row-main"><b>Website id</b></div><div class="row-val">${escapeHtml(w.id)}</div></div>`;
-	} else {
-		html += '<div class="empty"><b>No website linked</b><span>Generate a link code in the app, then paste it into the WordPress plugin.</span></div>';
-	}
-	html +=
-		'<div class="note">Link codes are generated in the app only. A code is eight characters, valid for ten ' +
-		'minutes, and can be used once.</div></div></div>';
-	$('#page-website').innerHTML = html;
-}
-
-async function renderSubscription() {
-	const host = $('#page-subscription');
-	host.innerHTML = '<div class="wrap"><div id="planList"></div></div>';
-	if (state.plans.length === 0) {
-		try {
-			const snap = await getDocs(fsQuery(collection(fs, 'plans'), orderBy('tier')));
-			state.plans = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-		} catch (err) {
-			state.plans = [];
-		}
-	}
-	const list = $('#planList');
-	if (state.plans.length === 0) {
-		const card = el('div', 'card');
-		card.appendChild(emptyState('card', 'No plans available', 'The plan catalogue is empty. Run the seeder against Firestore and reload.'));
-		list.appendChild(card);
-		return;
-	}
-	const currentId = (state.tenant && state.tenant.planId) || '';
-	for (const plan of state.plans) {
-		const card = el('div', 'plan' + (plan.id === currentId ? ' current' : ''));
-		card.appendChild(el('h3', null, plan.name || plan.id));
-		const price = el('div', 'price');
-		price.textContent = '$' + Math.round((plan.priceCents || 0) / 100);
-		price.appendChild(el('small', null, ' / month'));
-		card.appendChild(price);
-		const ul = el('ul');
-		for (const feature of plan.features || []) {
-			const li = el('li');
-			const tick = el('span');
-			tick.innerHTML = ICONS.check;
-			li.appendChild(tick);
-			li.appendChild(el('span', null, feature === '*' ? 'Calling agent' : feature.replace(/_/g, ' ')));
-			ul.appendChild(li);
-		}
-		card.appendChild(ul);
-		const btn = el('button', 'btn', plan.id === currentId ? 'Current plan' : 'Subscribe');
-		btn.disabled = plan.id === currentId;
-		btn.onclick = () => toast('Subscriptions are completed in the app.');
-		card.appendChild(btn);
-		list.appendChild(card);
-	}
-}
-
-function renderStorage() {
-	const html =
-		'<div class="wrap">' +
-		'<div class="card"><div class="card-title">This browser</div>' +
-		`<div class="row"><span class="row-tile" style="background:#1D6FE0">${ICONS.database}</span>` +
-		'<div class="row-main"><b>Paired session</b><span id="sessUid"></span></div></div>' +
-		`<div class="row"><span class="row-tile" style="background:#D97706">${ICONS.sweep}</span>` +
-		'<div class="row-main"><b>Clear local cache</b><span>Removes the saved pairing from this browser only.</span></div>' +
-		'<button class="btn ghost sm" id="clearLocal">Clear</button></div>' +
-		`<div class="row"><span class="row-tile" style="background:#C2372F">${ICONS.power}</span>` +
-		'<div class="row-main"><b>Log out of this browser</b><span>Revokes the grant so this browser has to scan a new QR.</span></div>' +
-		'<button class="btn danger sm" id="revoke">Log out</button></div></div>' +
-		'<div class="card"><div class="card-title">Where your data lives</div>' +
-		'<div class="note">Conversations and messages sit in the Realtime Database and are purged 24 hours ' +
-		'after the last activity unless a thread is kept. Everything durable — the account, captured ' +
-		'emails, templates and the linked website — lives in Firestore and is never purged automatically. ' +
-		'Deleting the workspace is done from the Firebase console.</div></div></div>';
-	$('#page-storage').innerHTML = html;
-	$('#sessUid').textContent = state.uid || '';
-	$('#clearLocal').onclick = () => {
-		storeSession(null);
-		toast('Local cache cleared.');
-	};
-	$('#revoke').onclick = async () => {
-		try {
-			await dbRemove(ref(db, `chats/${state.tenantId}/sessions/${state.uid}`));
-		} catch (err) {
-			/* the owner may have revoked it already */
-		}
-		storeSession(null);
-		window.location.reload();
-	};
+function settingsRow(icon, tint, title, sub, control) {
+	return `<div class="row${control === 'app' ? ' app-only' : ''}" data-row="${title}">` +
+		`<span class="row-tile" style="background:${tint}">${icon}</span>` +
+		`<div class="row-main"><b>${escapeHtml(title)}</b><span>${escapeHtml(sub)}</span></div>` +
+		(control && control !== 'app' ? control : '') +
+		'</div>';
 }
 
 function renderSettings() {
 	const dark = document.documentElement.dataset.theme === 'dark';
-	const html =
-		'<div class="wrap"><div class="card"><div class="card-title">Appearance</div>' +
-		`<div class="row"><span class="row-tile" style="background:#3F3FBF">${ICONS.moon}</span>` +
-		'<div class="row-main"><b>Dark mode</b><span>Follows this browser only.</span></div>' +
-		`<button class="switch${dark ? ' on' : ''}" id="darkToggle"></button></div>` +
-		`<div class="row"><span class="row-tile" style="background:#1E9E52">${ICONS.bell}</span>` +
-		'<div class="row-main"><b>Desktop notifications</b><span>Alerts when a new visitor asks for support.</span></div>' +
-		`<button class="switch${Notification.permission === 'granted' ? ' on' : ''}" id="notifToggle"></button></div></div>` +
-		'<div class="card"><div class="card-title">Widget</div>' +
-		'<div class="note">The widget’s colours, header title and automated replies are configured in the ' +
-		'WordPress plugin under Settings → Support Chat. They are not editable from here.</div></div></div>';
+	const tenant = state.tenant || {};
+	const email = tenant.email || 'Signed in on this browser';
+	const site = (state.website && (state.website.domain || state.website.url)) || 'No website linked yet';
+	const plan = tenant.planName || tenant.plan || 'Free';
+	const T = SETTING_TINTS;
+
+	const html = '<div class="wrap">' +
+
+		'<div class="card"><div class="card-title">Account</div>' +
+		settingsRow(ICONS.person, T.blue, email, 'Signed in', 'app') +
+		settingsRow(ICONS.globe, T.teal, 'Link your website', site, 'app') +
+		settingsRow(ICONS.globe, T.purple, 'Link a computer', 'This browser is paired', 'app') +
+		settingsRow(ICONS.card, T.indigo, 'Subscription', plan + ' plan', 'app') +
+		'</div>' +
+
+		'<div class="card"><div class="card-title">Notifications</div>' +
+		settingsRow(ICONS.broadcast, T.green, 'Stay connected', 'Keeps this browser listening for new chats.',
+			'<button class="switch on" id="stayToggle"></button>') +
+		settingsRow(ICONS.bell, T.orange, 'Allow instant notifications',
+			Notification.permission === 'granted' ? 'Allowed for this browser' : 'Not allowed yet',
+			`<button class="switch${Notification.permission === 'granted' ? ' on' : ''}" id="notifToggle"></button>`) +
+		settingsRow(ICONS.power, T.red, 'Autostart', 'Set on your phone.', 'app') +
+		'</div>' +
+
+		'<div class="card"><div class="card-title">Appearance</div>' +
+		settingsRow(ICONS.moon, T.indigo, 'Dark mode', 'Follows this browser only.',
+			`<button class="switch${dark ? ' on' : ''}" id="darkToggle"></button>`) +
+		settingsRow(ICONS.image, T.pink, 'Chat wallpaper', 'Set on your phone.', 'app') +
+		'</div>' +
+
+		'<div class="card"><div class="card-title">Other</div>' +
+		settingsRow(ICONS.database, T.plum, 'Storage and data', 'Log this browser out or clear its cache.',
+			'<button class="btn ghost sm" id="storageBtn">Manage</button>') +
+		settingsRow(ICONS.help, T.bronze, 'Help and contact', 'Reach the team.',
+			'<button class="btn ghost sm" id="helpBtn">Open</button>') +
+		'</div>' +
+
+		'<div class="note">Support Chat Web 1.0.0</div></div>';
+
 	$('#page-settings').innerHTML = html;
+
+	// Rows the phone owns say so once, rather than looking broken.
+	for (const row of document.querySelectorAll('#page-settings .row.app-only')) {
+		row.onclick = () => toast('Change this in Support Chat on your phone.');
+	}
 
 	$('#darkToggle').onclick = (e) => {
 		const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
 		applyTheme(next);
 		e.currentTarget.classList.toggle('on', next === 'dark');
 	};
+
+	$('#stayToggle').onclick = () => toast('This browser stays connected while the tab is open.');
+
 	$('#notifToggle').onclick = async (e) => {
 		if (Notification.permission === 'granted') {
-			toast('Turn notifications off in your browser’s site settings.');
+			toast('Turn notifications off in your browser\u2019s site settings.');
 			return;
 		}
 		const result = await Notification.requestPermission();
 		e.currentTarget.classList.toggle('on', result === 'granted');
 	};
+
+	/*
+	 * Storage and data is a dialog rather than a page. The app has a whole screen for it, but the
+	 * only two things it can do in a browser are these, and a page holding two rows next to five
+	 * that say "set on your phone" was not worth a nav entry.
+	 */
+	$('#storageBtn').onclick = () => {
+		const shut = openSheet('Storage and data',
+			'<div class="card">' +
+			'<div class="row"><div class="row-main"><b>Clear local cache</b>' +
+			'<span>Removes the saved pairing from this browser only.</span></div>' +
+			'<button class="btn ghost sm" id="clearLocal">Clear</button></div>' +
+			'<div class="row"><div class="row-main"><b>Log out of this browser</b>' +
+			'<span>Revokes the grant so this browser has to scan a new QR.</span></div>' +
+			'<button class="btn danger sm" id="revoke">Log out</button></div></div>');
+		$('#clearLocal').onclick = () => {
+			storeSession(null);
+			shut();
+			toast('Local cache cleared. Reload to pair again.');
+		};
+		$('#revoke').onclick = () => {
+			storeSession(null);
+			location.reload();
+		};
+	};
+
+	$('#helpBtn').onclick = () => showPage('help');
 }
 
 function renderHelp() {
@@ -1136,8 +1177,8 @@ function renderHelp() {
 		'<div class="row-main"><b>info@keykraftt.com</b><span>Support inbox</span></div></div>' +
 		`<div class="row"><span class="row-tile" style="background:#1D6FE0">${ICONS.globe}</span>` +
 		'<div class="row-main"><b>keykraftt.com</b><span>Website</span></div></div>' +
-		'<div class="note">This browser is paired to your workspace. To sign it out, open Storage and data ' +
-		'and choose Log out, or remove the session from the app.</div></div></div>';
+		'<div class="note">This browser is paired to your workspace. To sign it out, open Settings and ' +
+		'choose Storage and data, or remove the session from the app.</div></div></div>';
 }
 
 // ==========================================================================
@@ -1162,10 +1203,77 @@ function notifyPending() {
 }
 
 // ==========================================================================
+// Resizable conversation list
+// ==========================================================================
+/*
+ * The list was pinned at 372px. On a wide screen that wastes the thread's space, and on a
+ * laptop it crowds it.
+ *
+ * The clamp is enforced here as well as in the CSS max-width, because the stored value has to be
+ * clamped too: a width saved on a 2560px monitor must not open off-screen on a 1280px laptop.
+ */
+const INBOX_MIN = 280;
+const INBOX_MAX = 520;
+const INBOX_KEY = 'supportchat.inboxWidth';
+
+function setInboxWidth(px) {
+	const clamped = Math.max(INBOX_MIN, Math.min(INBOX_MAX, Math.round(px)));
+	document.documentElement.style.setProperty('--inbox-w', clamped + 'px');
+	return clamped;
+}
+
+function initInboxResizer() {
+	const saved = parseInt(localStorage.getItem(INBOX_KEY) || '', 10);
+	if (!Number.isNaN(saved)) setInboxWidth(saved);
+
+	const handle = $('#inboxResizer');
+	const inbox = document.querySelector('.inbox');
+	if (!handle || !inbox) return;
+
+	let dragging = false;
+
+	const move = (e) => {
+		if (!dragging) return;
+		e.preventDefault();
+		const point = e.touches ? e.touches[0].clientX : e.clientX;
+		setInboxWidth(point - inbox.getBoundingClientRect().left);
+	};
+
+	const stop = () => {
+		if (!dragging) return;
+		dragging = false;
+		handle.classList.remove('dragging');
+		document.body.classList.remove('resizing');
+		const current = parseInt(getComputedStyle(inbox).width, 10);
+		if (!Number.isNaN(current)) localStorage.setItem(INBOX_KEY, String(current));
+	};
+
+	const start = (e) => {
+		dragging = true;
+		handle.classList.add('dragging');
+		document.body.classList.add('resizing');
+		move(e);
+	};
+
+	handle.addEventListener('mousedown', start);
+	handle.addEventListener('touchstart', start, { passive: false });
+	window.addEventListener('mousemove', move);
+	window.addEventListener('touchmove', move, { passive: false });
+	window.addEventListener('mouseup', stop);
+	window.addEventListener('touchend', stop);
+
+	// Double click puts it back, so a bad drag is one gesture to undo rather than a careful one.
+	handle.addEventListener('dblclick', () => {
+		localStorage.setItem(INBOX_KEY, String(setInboxWidth(372)));
+	});
+}
+
+// ==========================================================================
 // Boot
 // ==========================================================================
 async function boot() {
 	applyTheme();
+	initInboxResizer();
 
 	$('#hamburger').onclick = () => openDrawer(true);
 	$('#scrim').onclick = () => openDrawer(false);

@@ -1,14 +1,40 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Support Chat Web</title>
 <meta name="theme-color" content="#2f6f92">
+<meta name="theme-color" content="#0b141a" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%232f6f92'/><path d='M25 15.2c0 4.4-4 8-9 8a11 11 0 0 1-3-.4L8 25l1.4-4a7.7 7.7 0 0 1-2.4-5.8c0-4.4 4-8 9-8s9 3.6 9 8Z' fill='none' stroke='%2351c9fd' stroke-width='2'/></svg>">
+<!--
+	The theme is resolved here, inline and before the stylesheet, rather than in console.js.
+	console.js is a module, so it does not run until after first paint: the document used to be
+	hardcoded to data-theme="light" and a dark-mode user got a full white flash on every load.
+-->
+<script>
+	try {
+		document.documentElement.dataset.theme = localStorage.getItem('supportchat.theme') || 'light';
+		var w = parseInt(localStorage.getItem('supportchat.inboxWidth') || '', 10);
+		if (!isNaN(w)) document.documentElement.style.setProperty('--inbox-w', Math.max(280, Math.min(520, w)) + 'px');
+	} catch (e) {
+		document.documentElement.dataset.theme = 'light';
+	}
+</script>
 <link rel="stylesheet" href="assets/console.css">
 </head>
 <body>
+
+<!-- ============================================================ loading -->
+<!-- Covers the gap between a scanned QR and a console that actually has data in it. -->
+<div id="loading" class="hidden">
+	<div class="load-inner">
+		<div class="load-mark"></div>
+		<b>Support Chat</b>
+		<span>Loading your workspace…</span>
+		<div class="load-dots"><i></i><i></i><i></i></div>
+	</div>
+</div>
 
 <!-- ============================================================ pairing -->
 <div id="pairing">
@@ -62,6 +88,8 @@
 				</div>
 				<div class="chips" id="chips"></div>
 				<div class="conv-list" id="convList"></div>
+				<!-- Drag to resize; double click resets. Clamped 280-520px. -->
+				<div class="inbox-resizer" id="inboxResizer" title="Drag to resize"></div>
 			</aside>
 
 			<main class="thread">
@@ -71,12 +99,13 @@
 			</main>
 		</section>
 
-		<!-- Pages mirror the app nav: Email · Email Automation · Phone Call · Social Media · Settings -->
+		<!-- Pages mirror the app nav: Email · Email Automation · Phone Call · Social Media · Settings · Help -->
 		<section class="page" id="page-emails"></section>
 		<section class="page" id="page-automation"></section>
 		<section class="page" id="page-calls"></section>
 		<section class="page" id="page-social"></section>
 		<section class="page" id="page-settings"></section>
+		<section class="page" id="page-help"></section>
 	</div>
 </div>
 

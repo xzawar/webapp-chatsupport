@@ -11,9 +11,12 @@ export const ICONS = {
 	back: `${open}<path d="M14.5 5.5 8 12l6.5 6.5"/></svg>`,
 	search: `${open}<circle cx="11" cy="11" r="6.4"/><path d="m16 16 4 4"/></svg>`,
 	send: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.6 20.4 21 12 3.6 3.6l.02 6.53L15 12l-11.38 1.87z"/></svg>`,
-	check: `${open}<path d="m5 12.8 4.2 4.2L19 7.4"/></svg>`,
-	checkDouble: `${open}<path d="m2 12.8 4.2 4.2L15.6 7.6"/><path d="m9.4 15.6 1.4 1.4L20.4 7.6"/></svg>`,
+	// check / checkDouble are gone. They only ever drew read receipts in a bubble, and the app
+	// does not draw those, so the browser must not either.
 	closeTicket: `${open}<circle cx="12" cy="12" r="8.6"/><path d="m9 9 6 6M15 9l-6 6"/></svg>`,
+	// The mirror of closeTicket, on the same circle, so the pair reads as one control in two
+	// states rather than as two unrelated buttons.
+	reopenTicket: `${open}<circle cx="12" cy="12" r="8.6"/><path d="M15.4 9.6H9.2a2.4 2.4 0 0 0 0 4.8h5.6"/><path d="m13.2 7.4 2.2 2.2-2.2 2.2"/></svg>`,
 
 	chat: `${open}<path d="M20.4 11.6c0 4-3.8 7.2-8.4 7.2a9.7 9.7 0 0 1-2.7-.37L4.6 20l1.2-3.5a6.9 6.9 0 0 1-2.2-4.9c0-4 3.8-7.2 8.4-7.2s8.4 3.2 8.4 7.2Z"/></svg>`,
 	mail: `${open}<rect x="3" y="5.4" width="18" height="13.2" rx="2.4"/><path d="m3.6 7.2 8.4 5.6 8.4-5.6"/></svg>`,
@@ -25,6 +28,7 @@ export const ICONS = {
 	database: `${open}<ellipse cx="12" cy="6.2" rx="7.4" ry="2.8"/><path d="M4.6 6.2v11.6c0 1.55 3.31 2.8 7.4 2.8s7.4-1.25 7.4-2.8V6.2"/><path d="M4.6 12c0 1.55 3.31 2.8 7.4 2.8s7.4-1.25 7.4-2.8"/></svg>`,
 	settings: `${open}<circle cx="12" cy="12" r="2.9"/><path d="M19.2 14.2a1.6 1.6 0 0 0 .32 1.76l.06.06a1.9 1.9 0 1 1-2.7 2.7l-.06-.06a1.6 1.6 0 0 0-1.76-.32 1.6 1.6 0 0 0-.97 1.47v.17a1.9 1.9 0 1 1-3.8 0v-.09a1.6 1.6 0 0 0-1.04-1.46 1.6 1.6 0 0 0-1.76.32l-.06.06a1.9 1.9 0 1 1-2.7-2.7l.06-.06a1.6 1.6 0 0 0 .32-1.76 1.6 1.6 0 0 0-1.47-.97H3.4a1.9 1.9 0 1 1 0-3.8h.09A1.6 1.6 0 0 0 4.95 8.6a1.6 1.6 0 0 0-.32-1.76l-.06-.06a1.9 1.9 0 1 1 2.7-2.7l.06.06a1.6 1.6 0 0 0 1.76.32h.08a1.6 1.6 0 0 0 .97-1.47V2.8a1.9 1.9 0 1 1 3.8 0v.09a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.76-.32l.06-.06a1.9 1.9 0 1 1 2.7 2.7l-.06.06a1.6 1.6 0 0 0-.32 1.76v.08a1.6 1.6 0 0 0 1.47.97h.17a1.9 1.9 0 1 1 0 3.8h-.09a1.6 1.6 0 0 0-1.4.85Z"/></svg>`,
 	help: `${open}<circle cx="12" cy="12" r="8.8"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.32c-.7.28-1 .84-1 1.58v.3"/><path d="M12 16.8h.01"/></svg>`,
+	image: `${open}<rect x="3" y="4.6" width="18" height="14.8" rx="2.6"/><circle cx="8.6" cy="9.6" r="1.8"/><path d="m4 16.4 4.6-4 3.4 3 3-2.6 4 3.6"/></svg>`,
 	moon: `${open}<path d="M20 14.2A8.4 8.4 0 0 1 9.8 4a8.6 8.6 0 1 0 10.2 10.2Z"/></svg>`,
 	bell: `${open}<path d="M18 9.6a6 6 0 1 0-12 0c0 5-2 6.4-2 6.4h16s-2-1.4-2-6.4Z"/><path d="M13.7 19.6a2 2 0 0 1-3.4 0"/></svg>`,
 	sweep: `${open}<path d="M4.2 19.8 12 12"/><path d="m14.6 4.2 5.2 5.2-4.4 4.4-5.2-5.2z"/><path d="M16.4 16.6h3.4M13.6 19.8h6.2"/></svg>`,
@@ -34,8 +38,11 @@ export const ICONS = {
 };
 
 /*
- * A stable colour per conversation. The app seeds its illustrated avatars off the conversation
- * id for the same reason: the same visitor keeps the same colour on both screens.
+ * A stable colour per conversation.
+ *
+ * PersonAvatar on the phone seeds its disc colour from the conversation id for exactly this
+ * reason: every website visitor shows the same letter, so the colour is the only thing telling
+ * them apart, and it has to be the same colour on both screens and after every reload.
  */
 const PALETTE = [
 	'linear-gradient(145deg,#51C9FD,#2F6F92)',
