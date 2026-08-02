@@ -1413,8 +1413,13 @@ function renderSettings() {
 			toast('Local cache cleared. Reload to pair again.');
 		};
 		$('#revoke').onclick = () => {
-			storeSession(null);
-			location.reload();
+			/*
+			 * Was storeSession(null) + reload, which only forgot the pairing locally. The
+			 * grant at chats/{tenant}/sessions/{uid} survived, so the phone's Linked devices
+			 * list kept showing a browser that had already logged out, and the rules kept
+			 * honouring it. revokeDevice deletes the grant first and reloads afterwards.
+			 */
+			revokeDevice(state.uid);
 		};
 	};
 
@@ -1429,9 +1434,9 @@ function renderSettings() {
 			'<span>Ends the session on this computer only.</span></div>' +
 			'<button class="btn danger sm" id="logoutGo">Log out</button></div></div>');
 		$('#logoutGo').onclick = () => {
-			storeSession(null);
+			// Delete the grant, not just the local copy of it. See revokeDevice.
 			shut();
-			location.reload();
+			revokeDevice(state.uid);
 		};
 	};
 }
