@@ -68,6 +68,9 @@ const FIREBASE_CONFIG = {
 
 const PAIR_TTL = 3 * 60 * 1000; // a QR is only good for three minutes
 const STORE_KEY = 'supportchat.web.v1';
+// Feature ids as the server writes them. These are matched by exact string, so they have to
+// stay in step with FEATURE_* in functions/src/config.js.
+const FEATURE_CHAT = 'chat';
 const FEATURE_EMAIL = 'email_automation';
 const FEATURE_SOCIAL = 'social_media';
 
@@ -346,12 +349,12 @@ async function enterConsole(tenantId) {
 	watchConnection();
 	watchConversations();
 	await loadTenant();
-	renderDrawer();
+	renderRail();
 	showPage(state.page);
 
 	// The shell is built and painted underneath by this point; the reveal is the last thing.
 	await untilLoaded();
-	renderDrawer();
+	renderRail();
 	if (state.page === 'chats') renderInbox();
 	showLoading(false);
 }
@@ -414,7 +417,7 @@ function watchConversations() {
 			state.conversations = rows;
 			state.convosLoaded = true;
 			if (state.page === 'chats') renderInbox();
-			renderDrawer();
+			renderRail();
 		},
 		() => {
 			// Also mark it loaded on failure, or the loading screen would sit there forever on a
@@ -549,51 +552,113 @@ async function setStatusOf(conversationId, status) {
 // ==========================================================================
 // Navigation
 // ==========================================================================
-// Exact web navigation requested: the same core areas as the app, nothing else.
+/*
+ * The same core areas as the app, nothing else.
+ *
+ * `rail: true` marks the destinations that get a permanent button. Help is reachable from the
+ * Settings list exactly as it is on the phone, so it does not need one, and giving it a rail
+ * slot would put a section in the browser's primary navigation that the app keeps two levels
+ * down. Email automation is gone entirely: there is no such screen in the app, so under the
+ * rule that the browser shows only what the phone shows, it had no reason to exist.
+ */
 const PAGES = [
-	{ id: 'chats',      label: 'Chats',            icon: 'chat',      tint: '#1D6FE0' },
-	{ id: 'emails',     label: 'Email',            icon: 'mail',      tint: '#0E8F86', feature: FEATURE_EMAIL },
-	{ id: 'automation', label: 'Email automation', icon: 'broadcast', tint: '#1E9E52', feature: FEATURE_EMAIL },
-	{ id: 'calls',      label: 'Phone call',       icon: 'call',      tint: '#D97706' },
-	{ id: 'social',     label: 'Social media',     icon: 'social',    tint: '#B83280', feature: FEATURE_SOCIAL },
-	{ id: 'settings',   label: 'Settings',         icon: 'settings',  tint: '#8A6A3B' },
-	{ id: 'help',       label: 'Help and contact', icon: 'help',      tint: '#E0A126' },
+	{ id: 'chats',      label: 'Chats',            icon: 'chat',     rail: true },
+	{ id: 'emails',     label: 'Email',            icon: 'mail',     rail: true, feature: FEATURE_EMAIL },
+	{ id: 'calls',      label: 'Phone call',       icon: 'call',     rail: true },
+	{ id: 'social',     label: 'Social media',     icon: 'social',   rail: true, feature: FEATURE_SOCIAL },
+	{ id: 'settings',   label: 'Settings',         icon: 'settings' },
+	{ id: 'help',       label: 'Help and contact', icon: 'help' },
 ];
 
-function openDrawer(open) {
-	$('#drawer').classList.toggle('open', open);
-	$('#scrim').classList.toggle('open', open);
+/*
+ * Which features each plan carries.
+ *
+ * This mirrors PLANS in functions/src/seed.js. The console reads Firestore directly and has no
+ * route to the plans collection, so the catalogue has to be restated here; if a plan's contents
+ * change in the seed, change them here too.
+ *
+ * Ultimate lists the concrete features next to the wildcard for the same reason the seed does:
+ * a membership test against a list holding only "*" fails every specific check, which is one of
+ * the ways an Ultimate customer can be told they own nothing.
+ */
+const PLAN_FEATURES = {
+	free:   [FEATURE_CHAT],
+	plan_1: [FEATURE_CHAT],
+	plan_2: [FEATURE_CHAT, FEATURE_EMAIL],
+	plan_3: [FEATURE_CHAT, FEATURE_EMAIL, FEATURE_SOCIAL],
+	plan_4: [FEATURE_CHAT, FEATURE_EMAIL, FEATURE_SOCIAL, '*'],
+	// The catalogue is keyed by id, but tenant.plan has been seen holding the display name, so
+	// both spellings resolve.
+	starter:  [FEATURE_CHAT],
+	growth:   [FEATURE_CHAT, FEATURE_EMAIL],
+	scale:    [FEATURE_CHAT, FEATURE_EMAIL, FEATURE_SOCIAL],
+	ultimate: [FEATURE_CHAT, FEATURE_EMAIL, FEATURE_SOCIAL, '*'],
+};
+
+/*
+ * Everything this workspace owns.
+ *
+ * The union of two sources, on purpose. features[] copied onto the tenant document is the
+ * server's own answer and is the more authoritative of the two, but it is a snapshot taken at
+ * activation: a tenant written before the catalogue changed, or by a path that set plan without
+ * re-copying the list, carries a stale array. Reading tenant.plan through the catalogue covers
+ * that case. Taking the union means a workspace is only locked out of something when both
+ * sources agree it does not own it, which is the correct bias for a paying customer.
+ */
+function ownedFeatures() {
+	const tenant = state.tenant || {};
+	const owned = new Set();
+
+	if (Array.isArray(tenant.features)) {
+		for (const entry of tenant.features) {
+			if (typeof entry === 'string' && entry.trim()) owned.add(entry.trim());
+		}
+	}
+
+	const key = String(tenant.plan || '').trim().toLowerCase();
+	for (const entry of PLAN_FEATURES[key] || []) owned.add(entry);
+
+	return owned;
 }
 
-function renderDrawer() {
-	const list = $('#navList');
-	list.innerHTML = '';
+function renderRail() {
+	const top = $('#railTop');
+	const foot = $('#railFoot');
+	if (!top || !foot) return;
+	top.innerHTML = '';
+	foot.innerHTML = '';
+
 	const pending = state.conversations.filter((c) => c.status === 'pending').length;
 	const unread = state.conversations.reduce((sum, c) => sum + (c.unread > 0 ? 1 : 0), 0);
 
-	for (const page of PAGES) {
-		const btn = el('button', 'nav-item' + (state.page === page.id ? ' active' : ''));
-		const tile = el('span', 'nav-tile');
-		tile.style.background = page.tint;
-		tile.innerHTML = ICONS[page.icon] || ICONS.chat;
-		btn.appendChild(tile);
-		btn.appendChild(el('span', null, page.label));
+	const button = (page) => {
+		const btn = el('button', 'rail-btn' + (state.page === page.id ? ' active' : ''));
+		btn.type = 'button';
+		// Icons only, so the label has to survive as the accessible name and as the tooltip.
+		// Without both, an icon rail is a row of unlabelled squares to a screen reader and a
+		// guessing game to everyone else on their first visit.
+		btn.title = page.label;
+		btn.setAttribute('aria-label', page.label);
+		btn.innerHTML = ICONS[page.icon] || ICONS.chat;
 		const count = page.id === 'chats' ? unread + pending : 0;
-		if (count > 0) btn.appendChild(el('span', 'nav-badge', String(count)));
-		btn.onclick = () => {
-			showPage(page.id);
-			openDrawer(false);
-		};
-		list.appendChild(btn);
-	}
+		if (count > 0) btn.appendChild(el('span', 'rail-badge', String(count)));
+		btn.onclick = () => showPage(page.id);
+		return btn;
+	};
 
-	const name = (state.tenant && (state.tenant.companyName || state.tenant.ownerName)) || 'Workspace';
-	$('#whoName').textContent = name;
-	$('#whoMail').textContent = (state.tenant && state.tenant.email) || 'Paired browser';
-	$('#whoAvatar').textContent = avatarLetter(
-		name === 'Workspace' ? '' : name,
-		(state.tenant && state.tenant.email) || '',
-	);
+	for (const page of PAGES) {
+		if (page.rail) top.appendChild(button(page));
+	}
+	foot.appendChild(button(PAGES.find((p) => p.id === 'settings')));
+
+	// The workspace avatar is pinned to the bottom, under the settings button, the way the
+	// reference does it. It is an identity marker rather than a control, so it is not a button.
+	const name = (state.tenant && (state.tenant.companyName || state.tenant.ownerName)) || '';
+	const mail = (state.tenant && state.tenant.email) || '';
+	const chip = el('span', 'rail-me', avatarLetter(name, mail));
+	chip.title = name || mail || 'Paired browser';
+	chip.style.background = avatarFor(name || mail || 'workspace');
+	foot.appendChild(chip);
 }
 
 function showPage(id) {
@@ -602,11 +667,10 @@ function showPage(id) {
 	$('#pageTitle').textContent = page.label;
 	for (const node of document.querySelectorAll('.page')) node.classList.remove('active');
 	$('#page-' + id).classList.add('active');
-	renderDrawer();
+	renderRail();
 
 	if (id === 'chats') renderInbox();
 	if (id === 'emails') renderEmails();
-	if (id === 'automation') renderAutomation();
 	if (id === 'calls') renderCalls();
 	if (id === 'social') renderSocial();
 	if (id === 'settings') renderSettings();
@@ -895,8 +959,8 @@ function emptyState(icon, title, message) {
 }
 
 function gate(feature, label) {
-	const features = (state.tenant && state.tenant.features) || [];
-	if (features.includes('*') || features.includes(feature)) return null;
+	const features = ownedFeatures();
+	if (features.has('*') || features.has(feature)) return null;
 	const node = el('div', 'wrap');
 	const card = el('div', 'card');
 	card.appendChild(emptyState('card', label + ' is not in your plan', 'Upgrade to unlock this section. Your current plan does not include it.'));
@@ -955,74 +1019,6 @@ async function loadLeads() {
 	} catch (err) {
 		state.leads = [];
 	}
-}
-
-async function renderAutomation() {
-	const host = $('#page-automation');
-	const blocked = gate(FEATURE_EMAIL, 'Email automation');
-	if (blocked) {
-		host.innerHTML = '';
-		host.appendChild(blocked);
-		return;
-	}
-	host.innerHTML =
-		'<div class="wrap"><div class="card"><div class="card-title">Templates</div><div id="tplRows"></div>' +
-		'<div class="note">Templates are shared with the app. Editing one here changes it everywhere.</div></div></div>';
-	try {
-		const snap = await getDocs(collection(fs, 'tenants', state.tenantId, 'emailTemplates'));
-		state.templates = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-	} catch (err) {
-		state.templates = [];
-	}
-	const rows = $('#tplRows');
-	rows.innerHTML = '';
-	if (state.templates.length === 0) {
-		rows.appendChild(emptyState('broadcast', 'No templates', 'Seed the catalogue or add templates from the app.'));
-		return;
-	}
-	for (const tpl of state.templates) {
-		const row = el('div', 'row');
-		const tile = el('span', 'row-tile');
-		tile.style.background = '#1E9E52';
-		tile.innerHTML = ICONS.broadcast;
-		row.appendChild(tile);
-		const main = el('div', 'row-main');
-		main.appendChild(el('b', null, tpl.name || tpl.id));
-		main.appendChild(el('span', null, tpl.subject || 'No subject'));
-		row.appendChild(main);
-		const edit = el('button', 'btn ghost sm', 'Edit');
-		edit.onclick = () => editTemplate(tpl);
-		row.appendChild(edit);
-		rows.appendChild(row);
-	}
-}
-
-function editTemplate(tpl) {
-	const html =
-		'<div style="padding:6px 20px 4px"><input class="field" id="tplSubject" placeholder="Subject" value="' +
-		escapeHtml(tpl.subject || '') +
-		'"></div><div style="padding:10px 20px 4px"><textarea class="field" id="tplBody" placeholder="Body">' +
-		escapeHtml(tpl.body || '') +
-		'</textarea></div><div style="padding:10px 20px 0"><button class="btn sm" id="tplSave">Save template</button></div>';
-	const shut = openSheet(tpl.name || tpl.id, html);
-	document.querySelector('#tplSave').onclick = async () => {
-		try {
-			await setDoc(
-				doc(fs, 'tenants', state.tenantId, 'emailTemplates', tpl.id),
-				{
-					...tpl,
-					subject: document.querySelector('#tplSubject').value,
-					body: document.querySelector('#tplBody').value,
-				},
-				{ merge: true },
-			);
-			toast('Template saved.');
-			shut();
-			renderAutomation();
-		} catch (err) {
-			toast('Could not save that template.');
-		}
-	};
 }
 
 function renderCalls() {
@@ -1116,6 +1112,20 @@ function renderSettings() {
 			'<button class="btn ghost sm" id="helpBtn">Open</button>') +
 		'</div>' +
 
+		/*
+		 * Log out gets its own card at the end rather than a row inside Other.
+		 *
+		 * It was previously only reachable by opening Storage and data and reading to the
+		 * bottom of a sheet, which is three steps and a wrong-looking place for it. Signing out
+		 * is a destination in its own right, so it sits alone, last, in the danger colour, where
+		 * a destructive action is expected to be and where it cannot be hit by accident on the
+		 * way to something else.
+		 */
+		'<div class="card">' +
+		settingsRow(ICONS.logout, T.red, 'Log out', 'Unpairs this browser. Your phone stays signed in.',
+			'<button class="btn danger sm" id="logoutBtn">Log out</button>') +
+		'</div>' +
+
 		'<div class="note">Support Chat Web 1.0.0</div></div>';
 
 	$('#page-settings').innerHTML = html;
@@ -1168,6 +1178,21 @@ function renderSettings() {
 	};
 
 	$('#helpBtn').onclick = () => showPage('help');
+
+	$('#logoutBtn').onclick = () => {
+		const shut = openSheet('Log out of this browser',
+			'<div class="card"><div class="note">This revokes the pairing grant. The console will go ' +
+			'back to the QR screen and you will need to scan again from the app to return. Nothing ' +
+			'is deleted and your phone is not signed out.</div>' +
+			'<div class="row"><div class="row-main"><b>Log out</b>' +
+			'<span>Ends the session on this computer only.</span></div>' +
+			'<button class="btn danger sm" id="logoutGo">Log out</button></div></div>');
+		$('#logoutGo').onclick = () => {
+			storeSession(null);
+			shut();
+			location.reload();
+		};
+	};
 }
 
 function renderHelp() {
@@ -1275,15 +1300,10 @@ async function boot() {
 	applyTheme();
 	initInboxResizer();
 
-	$('#hamburger').onclick = () => openDrawer(true);
-	$('#scrim').onclick = () => openDrawer(false);
 	$('#searchBox').oninput = (e) => {
 		state.search = e.target.value;
 		renderInbox();
 	};
-	document.addEventListener('keydown', (e) => {
-		if (e.key === 'Escape') openDrawer(false);
-	});
 
 	try {
 		app = initializeApp(FIREBASE_CONFIG);

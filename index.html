@@ -26,14 +26,10 @@
 <body>
 
 <!-- ============================================================ loading -->
-<!-- Covers the gap between a scanned QR and a console that actually has data in it. -->
+<!-- Covers the gap between a scanned QR and a console that actually has data in it.
+     A bar and nothing else, on purpose. See the loading block in console.css. -->
 <div id="loading" class="hidden">
-	<div class="load-inner">
-		<div class="load-mark"></div>
-		<b>Support Chat</b>
-		<span>Loading your workspace…</span>
-		<div class="load-dots"><i></i><i></i><i></i></div>
-	</div>
+	<div class="load-bar" role="progressbar" aria-label="Loading your workspace"><i></i></div>
 </div>
 
 <!-- ============================================================ pairing -->
@@ -65,14 +61,27 @@
 <!-- ============================================================== shell -->
 <div id="shell" class="hidden">
 
+	<!--
+		The icon rail replaces the hamburger.
+
+		A drawer costs two actions to reach anything: open it, then pick. On a desktop console
+		there is no reason to pay that, the horizontal space is free, and hiding navigation also
+		hides the fact that the other sections exist at all. Destinations live here permanently
+		and every one of them is one click away.
+
+		Buttons are filled in by renderRail() rather than written out here, so the rail and the
+		page list cannot drift apart.
+	-->
+	<nav class="rail" id="rail" aria-label="Sections">
+		<div class="rail-top" id="railTop"></div>
+		<div class="rail-foot" id="railFoot"></div>
+	</nav>
+
+	<div class="shell-main">
 	<header class="topbar">
 		<h2 id="pageTitle">Chats</h2>
 		<div class="spacer"></div>
 		<span class="conn-pill" id="connPill"><span class="conn-dot"></span><span id="connText">Connected</span></span>
-		<!-- Hamburger sits top RIGHT and opens the drawer from the right edge. -->
-		<button class="icon-btn" id="hamburger" aria-label="Open menu">
-			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-		</button>
 	</header>
 
 	<div class="pages">
@@ -101,27 +110,13 @@
 
 		<!-- Pages mirror the app nav: Email · Email Automation · Phone Call · Social Media · Settings · Help -->
 		<section class="page" id="page-emails"></section>
-		<section class="page" id="page-automation"></section>
 		<section class="page" id="page-calls"></section>
 		<section class="page" id="page-social"></section>
 		<section class="page" id="page-settings"></section>
 		<section class="page" id="page-help"></section>
 	</div>
-</div>
-
-<!-- ============================================================= drawer -->
-<div class="scrim" id="scrim"></div>
-<nav class="drawer" id="drawer">
-	<div class="drawer-head">
-		<div class="avatar-chip" id="whoAvatar">W</div>
-		<div class="who">
-			<b id="whoName">Workspace</b>
-			<span id="whoMail">Paired browser</span>
-		</div>
 	</div>
-	<div class="nav-list" id="navList"></div>
-	<div class="drawer-foot">Support Chat Web 1.0.0 &middot; paired session</div>
-</nav>
+</div>
 
 <div id="toasts"></div>
 

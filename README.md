@@ -28,13 +28,20 @@ firebase deploy --only database,firestore:rules
 
 The web browser gets an anonymous Firebase account, not your owner account. The app grants that anonymous account access only to your tenant. Removing the session from the browser's **Storage and data → Log out** revokes it.
 
-## Web menu
+## Web navigation
 
-The hamburger menu intentionally has only the app-equivalent areas:
+Navigation is an icon rail down the left edge, not a hamburger. A drawer costs two actions to
+reach anywhere (open it, then pick); the rail costs one and is always visible, which is the right
+trade on a desktop console where the horizontal space is there anyway.
+
+The rail carries only areas that also exist in the Android app:
 
 - Chats
-- Email
-- Email automation
-- Phone call
-- Social media
-- Settings
+- Emails
+- Calls
+- Social
+- Settings (pinned to the bottom of the rail)
+
+Help is reached from inside Settings, exactly as it is on the phone. Email automation was removed
+outright, because the app has no such screen and the web should not offer features the phone
+cannot show. Emails and Social only appear when the workspace's plan includes them.
