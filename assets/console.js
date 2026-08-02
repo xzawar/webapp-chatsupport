@@ -169,6 +169,37 @@ function toast(message) {
  * letter collides for every one of them; the disc colour is seeded from the conversation id,
  * which is what actually tells them apart. Same input, same colour, on the phone and here.
  */
+/**
+ * The owner's picture, resolved in the same order the Android app resolves it.
+ *
+ * This is the parity bug that made the whole feature look broken. The app stores the picture the
+ * owner picks as base64 JPEG on the Firestore tenant document, under `ownerPhoto`. This console
+ * read `photoUrl` and `ownerPhotoUrl` and never looked at `ownerPhoto` at all - so a picture set
+ * on the phone appeared on the phone, and the browser carried on showing a coloured letter
+ * indefinitely. Nothing was failing and nothing was logged; the two surfaces were simply reading
+ * different fields.
+ *
+ * The order matters and must stay identical to OwnerAvatar.kt:
+ *
+ *   1. ownerPhoto      the picture the owner deliberately chose. Always wins.
+ *   2. photoUrl        whatever Google supplied at sign-in. A default, not a choice.
+ *   3. null            the caller draws the coloured letter disc.
+ *
+ * The stored value is bare base64 with no data-URI prefix, because that is what the Firestore
+ * field holds and adding a prefix on the phone would waste bytes in a 20 KB budget. The prefix is
+ * added here instead, which is the only place it is needed.
+ */
+function ownerPhotoSrc(tenant) {
+	if (!tenant) return '';
+	const stored = String(tenant.ownerPhoto || '').trim();
+	if (stored) {
+		// Already a data URI or an http(s) URL? Use it untouched. Only bare base64 gets wrapped.
+		if (/^(data:|https?:)/i.test(stored)) return stored;
+		return 'data:image/jpeg;base64,' + stored;
+	}
+	return String(tenant.photoUrl || tenant.ownerPhotoUrl || '').trim();
+}
+
 function avatarLetter(name, email) {
 	const fromName = String(name || '').trim().match(/[a-z0-9]/i);
 	if (fromName) return fromName[0].toUpperCase();
@@ -860,15 +891,17 @@ function renderRail() {
 	// reference does it. It is an identity marker rather than a control, so it is not a button.
 	const name = (state.tenant && (state.tenant.companyName || state.tenant.ownerName)) || '';
 	const mail = (state.tenant && state.tenant.email) || '';
-	const photo = (state.tenant && (state.tenant.photoUrl || state.tenant.ownerPhotoUrl)) || '';
+	const photo = ownerPhotoSrc(state.tenant);
 	const chip = el('span', 'rail-me', photo ? '' : avatarLetter(name, mail));
 	chip.title = name || mail || 'Paired browser';
 
 	if (photo) {
 		/*
-		 * The Google picture the tenant signed in with, so the rail matches the account row in
-		 * the app. It is a remote image on a console that has to survive being offline, so the
-		 * coloured letter stays as the fallback and comes back if the image fails to load.
+		 * The owner's picture, so the rail matches the account row in the app. Usually this is
+		 * now the base64 value the owner chose on the phone, which is inline and therefore works
+		 * offline; when it is the Google URL instead it is a remote image on a console that has
+		 * to survive being offline, so the coloured letter stays as the fallback and comes back
+		 * if the image fails to load.
 		 */
 		const img = el('img');
 		img.src = photo;

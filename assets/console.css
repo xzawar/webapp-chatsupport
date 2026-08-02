@@ -1,71 +1,114 @@
 /*
  * Support Chat Web — stylesheet.
  *
- * Tokens mirror the Android theme so the two surfaces look like one product:
- * SkyLight #51C9FD, SkyShadow/BrandDeep #2F6F92, InkBlack #07090A.
+ * Every token below is transcribed from Color.kt. That file is the source of truth for both
+ * surfaces; nothing here is picked by eye, and nothing here should be adjusted without changing
+ * Color.kt first.
+ *
+ * WHY THIS WHOLE BLOCK WAS REWRITTEN
+ *
+ * The app moved from the WhatsApp-derived palette to a Telegram-style one - a true black page,
+ * neutral grey cards, and #3390EC as the accent - and this stylesheet did not follow. The result
+ * was two products side by side: a browser sitting on #0b141a with a #2f6f92 accent next to a
+ * phone sitting on #000000 with a #3390EC accent. Those are not variations of one design, they
+ * are different colours entirely, and it is the first thing anyone notices when both are open.
+ *
+ * The old greys were also slightly blue-green rather than neutral, so even the surfaces that
+ * looked "about right" read as a different temperature next to the phone.
  */
 
 :root {
-	--sky-light: #51c9fd;
-	--sky-deep: #4aa7f7;
-	--brand-deep: #2f6f92;
-	--ink: #07090a;
+	/*
+	 * The accent. TgBlue #3390EC, with TgBluePressed #2B7FD4 for the pressed and hover states
+	 * and as IconBlue, which is what the app draws glyphs in.
+	 *
+	 * Contrast, because this is where the old palette had a real rule that must not be lost:
+	 * white on #3390EC is about 3.6:1, which clears the 3:1 required for large text and UI
+	 * components but NOT the 4.5:1 required for body text. Use it for fills, glyphs, the
+	 * outgoing bubble and controls. Do not set small grey-on-blue body copy on it.
+	 */
+	--brand: #3390ec;
+	--brand-pressed: #2b7fd4;
+	--brand-light: #62a8f0;
+	/* Retained under their old names so nothing that still references them breaks. */
+	--sky-light: #62a8f0;
+	--sky-deep: #3390ec;
+	--brand-deep: #2b7fd4;
+	--ink: #0f0f0f;
 
-	--bg: #f2f4f5;
+	/* Light appearance: TgLightPage / TgLightCard / TgLightPill / TgLightSecondary. */
+	--bg: #f4f4f4;
 	--surface: #ffffff;
-	--surface-low: #f7f8f8;
-	--surface-high: #edeff0;
-	--on-surface: #14181b;
-	--on-muted: #4a4e51;
-	--outline: #dcdfe1;
-	--outline-soft: #e8eaec;
-	--danger: #c2372f;
+	--surface-low: #fafafa;
+	--surface-high: #ededed;
+	--surface-higher: #e3e3e3;
+	--on-surface: #0f0f0f;
+	--on-muted: #777777;
+	--outline: #e6e6e6;
+	--outline-soft: #efefef;
+	--danger: #e14545;
 	--ok: #1e9e52;
 
 	--bubble-in: #ffffff;
 	/*
 	 * One outgoing colour in both appearances, matching MessageBubble.kt. It used to be a pale
-	 * #d6f2ff here and a bright #51c9fd on the phone, which is two different products.
+	 * #d6f2ff here and a bright accent on the phone, which is two different products.
 	 */
-	--bubble-out: #2f6f92;
+	--bubble-out: #3390ec;
 	--bubble-out-text: #ffffff;
-	--surface-higher: #e3e6e8;
-	--wallpaper: #e9eef0;
+	--wallpaper: #ededed;
 
 	--radius-lg: 18px;
 	--radius-md: 14px;
 	--radius-sm: 10px;
-	--shadow: 0 1px 2px rgba(7, 9, 10, 0.06), 0 8px 24px rgba(7, 9, 10, 0.06);
-	--shadow-lift: 0 8px 32px rgba(7, 9, 10, 0.14);
+	--shadow: 0 1px 2px rgba(15, 15, 15, 0.06), 0 8px 24px rgba(15, 15, 15, 0.06);
+	--shadow-lift: 0 8px 32px rgba(15, 15, 15, 0.14);
 	--nav-width: 292px;
-	--motion: 320ms cubic-bezier(0.22, 0.9, 0.3, 1);
+	/*
+	 * 300ms, matching Motion.PAGE_MILLIS exactly.
+	 *
+	 * This was 320ms, which is close enough that nobody would call it wrong on its own and far
+	 * enough that switching between the two surfaces feels subtly inconsistent. The app now
+	 * opens and closes a page in exactly 300ms with no deferred start, so this does too.
+	 */
+	--motion: 300ms cubic-bezier(0.22, 0.9, 0.3, 1);
 }
 
 /*
- * Dark appearance: the WhatsApp surface set, matching Color.kt in the Android app.
+ * Dark appearance: the Telegram surface set, transcribed from Color.kt.
  *
- * These are not the brand greys stepped from #07090A that used to be here. They are the same
- * slightly blue-green near-blacks the phone now uses, so a person with the app open next to this
- * browser sees one product rather than two.
+ *   TgBlack     #000000  the page
+ *   TgCard      #181818  cards and the rail
+ *   TgElevated  #1C1C1C  raised surfaces
+ *   TgPill      #272727  pills, chips, the incoming bubble
+ *   TgPillHigh  #2E2E2E  a pressed pill
+ *   TgSecondary #7B7B7B  secondary text
+ *   TgHairline  #262626  dividers
+ *   TgRedDark   #EC4E4E  destructive
  *
- * The blue is unchanged, but where it is allowed changed: --brand-deep is the only blue that may
- * sit behind text, because white clears 5.3:1 on it. --sky-light is for glyphs and labels drawn
- * ON a dark surface and is never a fill behind a label - white on #51c9fd is about 1.9:1.
+ * True #000000 rather than a near-black, and that is deliberate rather than lazy: on the OLED
+ * panels most of these phones have, a true black page costs no power and produces a genuinely
+ * seamless edge, which is the entire visual idea the app's dark mode is built on. A near-black
+ * page would show a faint rectangle against the bezel.
+ *
+ * The greys are neutral - equal in all three channels - where the old WhatsApp set was tinted
+ * blue-green. That is why the previous tokens looked "nearly right but colder" beside the phone.
  */
 [data-theme='dark'] {
-	--bg: #0b141a;
-	--surface: #111b21;
-	--surface-low: #111b21;
-	--surface-high: #202c33;
-	--surface-higher: #2a3942;
-	--on-surface: #e9edef;
-	--on-muted: #8696a0;
-	--outline: #3b4a54;
-	--outline-soft: #222d34;
-	--bubble-in: #202c33;
-	--wallpaper: #0b141a;
-	--shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.4);
-	--shadow-lift: 0 8px 32px rgba(0, 0, 0, 0.6);
+	--bg: #000000;
+	--surface: #181818;
+	--surface-low: #141414;
+	--surface-high: #1c1c1c;
+	--surface-higher: #272727;
+	--on-surface: #ffffff;
+	--on-muted: #7b7b7b;
+	--outline: #262626;
+	--outline-soft: #1f1f1f;
+	--danger: #ec4e4e;
+	--bubble-in: #272727;
+	--wallpaper: #000000;
+	--shadow: 0 1px 2px rgba(0, 0, 0, 0.6), 0 8px 24px rgba(0, 0, 0, 0.5);
+	--shadow-lift: 0 8px 32px rgba(0, 0, 0, 0.7);
 }
 
 * { box-sizing: border-box; }
