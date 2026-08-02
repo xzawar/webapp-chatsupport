@@ -6,7 +6,14 @@
 <title>Support Chat Web</title>
 <meta name="theme-color" content="#2f6f92">
 <meta name="theme-color" content="#0b141a" media="(prefers-color-scheme: dark)">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%232f6f92'/><path d='M25 15.2c0 4.4-4 8-9 8a11 11 0 0 1-3-.4L8 25l1.4-4a7.7 7.7 0 0 1-2.4-5.8c0-4.4 4-8 9-8s9 3.6 9 8Z' fill='none' stroke='%2351c9fd' stroke-width='2'/></svg>">
+<!--
+	Real files rather than the inline SVG that used to sit here. The inline mark was a
+	hand-drawn approximation of the app icon, so the tab and the launcher were visibly two
+	different logos; these are generated from the same artwork the app ships.
+-->
+<link rel="icon" href="assets/favicon-32.png" sizes="32x32">
+<link rel="icon" href="assets/icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <!--
 	The theme is resolved here, inline and before the stylesheet, rather than in console.js.
 	console.js is a module, so it does not run until after first paint: the document used to be
@@ -33,28 +40,59 @@
 </div>
 
 <!-- ============================================================ pairing -->
+<!--
+	The login screen, laid out the way the reference screenshot does it: a masthead carrying the
+	product mark above the page, then one wide white card holding the numbered steps on the left
+	and the code on the right, then anything else below the card rather than inside it.
+
+	The card no longer carries the small-caps "SUPPORT CHAT WEB" strip, because the masthead now
+	says that; having both meant the product named itself twice within 80px.
+-->
 <div id="pairing">
-	<div class="pair-card">
-		<div>
-			<div class="pair-brand"><span class="pair-dot"></span> SUPPORT CHAT WEB</div>
-			<h1>Use Support Chat on your computer</h1>
-			<p class="lede">
-				This browser is not signed in to anything yet. Pair it with your phone once and it keeps
-				working until you log it out.
-			</p>
-			<ol class="pair-steps">
-				<li>Open <b>Support Chat</b> on your phone.</li>
-				<li>Go to <b>Settings</b> and tap <b>Link a computer</b>.</li>
-				<li>Point your phone at this screen to scan the code.</li>
-			</ol>
-		</div>
-		<div>
-			<div class="qr-frame">
-				<canvas id="qr" width="264" height="264"></canvas>
-				<div class="qr-veil" id="qrVeil">Preparing a secure code…</div>
+	<div class="pair-shell">
+
+		<header class="pair-masthead">
+			<img src="assets/icon-192.png" alt="" class="pair-logo">
+			<span>SUPPORT CHAT WEB</span>
+		</header>
+
+		<div class="pair-card">
+			<div class="pair-copy">
+				<h1>Log in to Support Chat Web</h1>
+				<p class="lede">
+					This browser is not signed in to anything yet. Pair it with your phone once and it
+					keeps working until you log it out.
+				</p>
+				<ol class="pair-steps">
+					<li>Open <b>Support Chat</b> on your phone.</li>
+					<li>Tap <b>Settings</b>, then <b>Link a computer</b>.</li>
+					<li>Point your phone at this screen to scan the code.</li>
+				</ol>
+				<p class="pair-stay">Stay logged in on this browser</p>
 			</div>
-			<div class="pair-status" id="pairStatus">Connecting…</div>
+
+			<div class="pair-code">
+				<div class="qr-frame">
+					<canvas id="qr" width="264" height="264"></canvas>
+					<div class="qr-veil" id="qrVeil">Preparing a secure code…</div>
+				</div>
+				<div class="pair-status" id="pairStatus">Connecting…</div>
+			</div>
 		</div>
+
+		<!--
+			Browsers already paired to this workspace. Hidden unless there is at least one, so a
+			first-time visitor sees a login screen and nothing else. It sits before login on
+			purpose: on a shared computer the useful moment to revoke a browser somebody left
+			signed in is before you sign in yourself, not after.
+		-->
+		<section class="pair-devices hidden" id="pairDevices">
+			<div class="card">
+				<div class="card-title">Connected devices</div>
+				<div id="pairDeviceList"></div>
+			</div>
+		</section>
+
 	</div>
 </div>
 

@@ -92,6 +92,10 @@ const state = {
 	page: 'chats',
 	online: true,
 	pair: null,
+	// Presence for this browser and the list of every browser holding a grant.
+	presence: null,
+	devices: [],
+	unsubDevices: null,
 	unsubConvos: null,
 	unsubMsgs: null,
 	sending: false,
@@ -341,10 +345,10 @@ async function enterConsole(tenantId) {
 	showLoading(true);
 	$('#shell').classList.remove('hidden');
 
-	// Keep the grant warm so the phone can show when this browser was last used.
-	const seen = ref(db, `chats/${tenantId}/sessions/${state.uid}/lastSeenAt`);
-	dbSet(seen, Date.now()).catch(() => {});
-	setInterval(() => dbSet(seen, Date.now()).catch(() => {}), 60000);
+	// Neither is awaited: the console should paint whether or not the grant node has landed
+	// yet, and startPresence may sit waiting for it for several seconds. See startPresence.
+	startPresence(tenantId);
+	watchDevices(tenantId);
 
 	watchConnection();
 	watchConversations();
@@ -357,6 +361,207 @@ async function enterConsole(tenantId) {
 	renderRail();
 	if (state.page === 'chats') renderInbox();
 	showLoading(false);
+}
+
+// ==========================================================================
+// Presence, and the list of paired browsers
+// ==========================================================================
+/*
+ * "Permission denied: missing or insufficient permissions", and where it came from.
+ *
+ * enterConsole used to take a ref to chats/{tenant}/sessions/{uid}/lastSeenAt, write it at
+ * once, and arm a 60s interval on the same ref. A freshly paired browser threw on all three.
+ *
+ * It is a race, not a rules bug. The phone makes two separate writes when it approves a scan:
+ * the approval on pairing/{sessionId}, and the grant at chats/{tenant}/sessions/{uid}. The
+ * console reacts to the approval the instant it appears, so it routinely reached the grant
+ * path first and tried to write a child of a node that did not exist yet. The rules authorise
+ * a uid only once it is listed under sessions, so the write was refused, correctly. The
+ * interval then repeated that refused write every minute for the life of the tab, which is
+ * why the error kept reappearing long after pairing had visibly succeeded.
+ *
+ * So: wait for the grant to exist before writing anything, and arm the interval only after a
+ * write has actually gone through.
+ */
+const PRESENCE_MILLIS = 60000;
+const GRANT_TRIES = 12;
+const GRANT_WAIT_MILLIS = 500;
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A short human name for a browser, read off its user agent. */
+function deviceLabel(ua) {
+	const agent = ua || '';
+	let browser = 'Browser';
+	if (/Edg\//.test(agent)) browser = 'Edge';
+	else if (/OPR\/|Opera/.test(agent)) browser = 'Opera';
+	else if (/Firefox\//.test(agent)) browser = 'Firefox';
+	else if (/Chrome\//.test(agent)) browser = 'Chrome';
+	else if (/Safari\//.test(agent)) browser = 'Safari';
+
+	let os = 'Computer';
+	if (/Windows/.test(agent)) os = 'Windows';
+	else if (/Macintosh|Mac OS X/.test(agent)) os = 'macOS';
+	else if (/Android/.test(agent)) os = 'Android';
+	else if (/iPhone|iPad|iPod/.test(agent)) os = 'iPhone';
+	else if (/CrOS/.test(agent)) os = 'ChromeOS';
+	else if (/Linux/.test(agent)) os = 'Linux';
+
+	return browser + ' on ' + os;
+}
+
+/** "Active now" / "12 minutes ago" / a date, for a lastSeenAt stamp. */
+function lastSeenText(at) {
+	if (!at) return 'Never used';
+	const gap = Date.now() - at;
+	if (gap < 2 * PRESENCE_MILLIS) return 'Active now';
+	const mins = Math.round(gap / 60000);
+	if (mins < 60) return mins + (mins === 1 ? ' minute ago' : ' minutes ago');
+	const hours = Math.round(mins / 60);
+	if (hours < 24) return hours + (hours === 1 ? ' hour ago' : ' hours ago');
+	const days = Math.round(hours / 24);
+	if (days < 7) return days + (days === 1 ? ' day ago' : ' days ago');
+	return new Date(at).toLocaleDateString();
+}
+
+/**
+ * Announce this browser, then keep the grant warm.
+ *
+ * The description (ua, label) is written here rather than by the phone because the phone
+ * cannot know what it just paired with. Without it the devices list can only say "a browser".
+ */
+async function startPresence(tenantId) {
+	const path = `chats/${tenantId}/sessions/${state.uid}`;
+	const node = ref(db, path);
+
+	let granted = false;
+	for (let attempt = 0; attempt < GRANT_TRIES; attempt++) {
+		try {
+			const snap = await dbGet(node);
+			if (snap.exists()) {
+				granted = true;
+				break;
+			}
+		} catch (err) {
+			// A denied read here means the same thing as an absent one: the grant is not
+			// visible to this uid yet. Both are worth another try.
+		}
+		await wait(GRANT_WAIT_MILLIS);
+	}
+	// Give up quietly. The console is already usable, and shouting about presence in a toast
+	// would be reporting an internal detail the operator cannot act on.
+	if (!granted) return;
+
+	const stamp = Date.now();
+	try {
+		await dbUpdate(node, {
+			lastSeenAt: stamp,
+			ua: navigator.userAgent.slice(0, 280),
+			label: deviceLabel(navigator.userAgent),
+		});
+	} catch (err) {
+		return;
+	}
+
+	const seen = ref(db, path + '/lastSeenAt');
+	if (state.presence) clearInterval(state.presence);
+	state.presence = setInterval(() => dbSet(seen, Date.now()).catch(() => {}), PRESENCE_MILLIS);
+	// Leave a truthful stamp behind if the tab closes, instead of a time frozen mid-session.
+	onDisconnect(seen).set(Date.now());
+}
+
+/**
+ * Watch every browser paired to this tenant.
+ *
+ * Used by the console and, before sign-in, by the pairing screen, so that somebody on a shared
+ * computer can revoke a browser they left logged in without having to log in first.
+ */
+function watchDevices(tenantId, options) {
+	const opts = options || {};
+	if (state.unsubDevices) state.unsubDevices();
+	state.unsubDevices = onValue(
+		ref(db, `chats/${tenantId}/sessions`),
+		(snap) => {
+			const rows = [];
+			snap.forEach((session) => {
+				const value = session.val() || {};
+				rows.push({
+					uid: session.key,
+					label: value.label || deviceLabel(value.ua),
+					lastSeenAt: value.lastSeenAt || value.grantedAt || 0,
+					thisOne: session.key === state.uid,
+				});
+			});
+			rows.sort((a, b) => (b.thisOne ? 1 : 0) - (a.thisOne ? 1 : 0) || b.lastSeenAt - a.lastSeenAt);
+			state.devices = rows;
+			if (opts.pairing) paintPairDevices();
+			else if (state.page === 'settings') paintDeviceList();
+		},
+		() => {
+			// Denied, which on the pairing screen is the ordinary case: this browser has no
+			// grant, so it cannot enumerate the tenant's others. Show nothing rather than an
+			// error about a feature the visitor did not ask for.
+			state.devices = [];
+			if (opts.pairing) paintPairDevices();
+			else if (state.page === 'settings') paintDeviceList();
+		},
+	);
+}
+
+/** One row per paired browser. Shared by the settings card and the pairing screen. */
+function deviceRowsHtml() {
+	if (!state.devices.length) {
+		return '<div class="row"><div class="row-main"><b>No other browsers</b>' +
+			'<span>Only this one is paired.</span></div></div>';
+	}
+	return state.devices.map((device) => {
+		const sub = lastSeenText(device.lastSeenAt) + (device.thisOne ? ' · This browser' : '');
+		return '<div class="row device">' +
+			`<span class="row-tile" style="background:${SETTING_TINTS.purple}">${ICONS.monitor}</span>` +
+			`<div class="row-main"><b>${escapeHtml(device.label)}</b><span>${escapeHtml(sub)}</span></div>` +
+			`<button class="btn danger sm" data-revoke="${escapeHtml(device.uid)}">Log out</button>` +
+			'</div>';
+	}).join('');
+}
+
+/** Revoke one browser by deleting its grant. The rules honour that on the next read. */
+async function revokeDevice(uid) {
+	try {
+		await dbRemove(ref(db, `chats/${state.tenantId}/sessions/${uid}`));
+	} catch (err) {
+		toast('Could not log that browser out.');
+		return;
+	}
+	if (uid === state.uid) {
+		storeSession(null);
+		location.reload();
+		return;
+	}
+	toast('That browser has been logged out.');
+}
+
+function wireDeviceButtons(root) {
+	for (const button of root.querySelectorAll('[data-revoke]')) {
+		button.onclick = () => revokeDevice(button.dataset.revoke);
+	}
+}
+
+function paintDeviceList() {
+	const host = $('#deviceList');
+	if (!host) return;
+	host.innerHTML = deviceRowsHtml();
+	wireDeviceButtons(host);
+}
+
+function paintPairDevices() {
+	const wrap = $('#pairDevices');
+	const host = $('#pairDeviceList');
+	if (!wrap || !host) return;
+	// Hidden entirely when there is nothing to manage, so the login screen stays a login
+	// screen for the ordinary first-time visitor.
+	wrap.classList.toggle('hidden', state.devices.length === 0);
+	host.innerHTML = deviceRowsHtml();
+	wireDeviceButtons(host);
 }
 
 function watchConnection() {
@@ -655,9 +860,30 @@ function renderRail() {
 	// reference does it. It is an identity marker rather than a control, so it is not a button.
 	const name = (state.tenant && (state.tenant.companyName || state.tenant.ownerName)) || '';
 	const mail = (state.tenant && state.tenant.email) || '';
-	const chip = el('span', 'rail-me', avatarLetter(name, mail));
+	const photo = (state.tenant && (state.tenant.photoUrl || state.tenant.ownerPhotoUrl)) || '';
+	const chip = el('span', 'rail-me', photo ? '' : avatarLetter(name, mail));
 	chip.title = name || mail || 'Paired browser';
-	chip.style.background = avatarFor(name || mail || 'workspace');
+
+	if (photo) {
+		/*
+		 * The Google picture the tenant signed in with, so the rail matches the account row in
+		 * the app. It is a remote image on a console that has to survive being offline, so the
+		 * coloured letter stays as the fallback and comes back if the image fails to load.
+		 */
+		const img = el('img');
+		img.src = photo;
+		img.alt = '';
+		img.referrerPolicy = 'no-referrer';
+		img.onerror = () => {
+			chip.classList.remove('has-photo');
+			chip.textContent = avatarLetter(name, mail);
+			chip.style.background = avatarFor(name || mail || 'workspace');
+		};
+		chip.classList.add('has-photo');
+		chip.appendChild(img);
+	} else {
+		chip.style.background = avatarFor(name || mail || 'workspace');
+	}
 	foot.appendChild(chip);
 }
 
@@ -1086,8 +1312,22 @@ function renderSettings() {
 		'<div class="card"><div class="card-title">Account</div>' +
 		settingsRow(ICONS.person, T.blue, email, 'Signed in', 'app') +
 		settingsRow(ICONS.globe, T.teal, 'Link your website', site, 'app') +
-		settingsRow(ICONS.globe, T.purple, 'Link a computer', 'This browser is paired', 'app') +
+		// A monitor, not the website globe. "Link your website" sits directly above and the two
+		// rows carrying the same picture made them read as one setting.
+		settingsRow(ICONS.monitor, T.purple, 'Link a computer', 'This browser is paired', 'app') +
+		settingsRow(ICONS.social, T.pink, 'Link social media accounts',
+			'Connect Instagram, Facebook and WhatsApp.', 'app') +
 		settingsRow(ICONS.card, T.indigo, 'Subscription', plan + ' plan', 'app') +
+		'</div>' +
+
+		/*
+		 * Connected devices. The list is filled in by paintDeviceList once RTDB answers rather
+		 * than rendered inline, because settings is drawn synchronously on every tab switch and
+		 * blocking it on a network read would stall the whole page.
+		 */
+		'<div class="card"><div class="card-title">Connected devices</div>' +
+		'<div id="deviceList"><div class="row"><div class="row-main"><b>Looking for paired ' +
+		'browsers…</b><span>This takes a moment.</span></div></div></div>' +
 		'</div>' +
 
 		'<div class="card"><div class="card-title">Notifications</div>' +
@@ -1126,9 +1366,10 @@ function renderSettings() {
 			'<button class="btn danger sm" id="logoutBtn">Log out</button>') +
 		'</div>' +
 
-		'<div class="note">Support Chat Web 1.0.0</div></div>';
+		'<div class="note">Support Chat Web 1.0.3</div></div>';
 
 	$('#page-settings').innerHTML = html;
+	paintDeviceList();
 
 	// Rows the phone owns say so once, rather than looking broken.
 	for (const row of document.querySelectorAll('#page-settings .row.app-only')) {
@@ -1320,6 +1561,13 @@ async function boot() {
 		state.uid = user.uid;
 		const resumed = await resumeSession();
 		if (!resumed) {
+			/*
+			 * A remembered tenant whose grant no longer works still tells us which workspace
+			 * this computer belongs to, which is enough to offer the devices list on the login
+			 * screen. If the read is denied, watchDevices leaves the section hidden.
+			 */
+			const saved = stored();
+			if (saved && saved.tenantId) watchDevices(saved.tenantId, { pairing: true });
 			try {
 				await beginPairing();
 			} catch (err) {

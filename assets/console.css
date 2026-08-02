@@ -103,18 +103,57 @@ button, input, textarea, select {
 .hidden { display: none !important; }
 
 /* ------------------------------------------------------------- pairing */
+/*
+ * #pairing scrolls now instead of centring rigidly. `place-items: center` on a fixed layer was
+ * fine while the card was the only thing on the screen, but with the connected devices list
+ * beneath it a short window clipped the bottom with no way to reach it. Centring moves to the
+ * shell's auto margins, which simply stop centring once the content outgrows the viewport.
+ */
 #pairing {
 	position: fixed;
 	inset: 0;
-	display: grid;
-	place-items: center;
+	overflow-y: auto;
 	padding: 24px;
 	background: var(--bg);
 	z-index: 50;
 }
 
+.pair-shell {
+	width: min(920px, 100%);
+	margin: auto;
+	min-height: 100%;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+}
+
+/*
+ * The mark sits above the card rather than inside it, which is what makes this read as a login
+ * page instead of a dialog. It is the real app icon, so the tab, the launcher and this masthead
+ * are finally the same picture.
+ */
+.pair-masthead {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	font-weight: 700;
+	font-size: 14px;
+	letter-spacing: 0.06em;
+	color: var(--brand-deep);
+	margin: 0 0 22px 4px;
+}
+
+[data-theme='dark'] .pair-masthead { color: var(--sky-light); }
+
+.pair-logo {
+	width: 30px;
+	height: 30px;
+	border-radius: 8px;
+	display: block;
+}
+
 .pair-card {
-	width: min(880px, 100%);
+	width: 100%;
 	background: var(--surface);
 	border-radius: 24px;
 	box-shadow: var(--shadow);
@@ -127,27 +166,24 @@ button, input, textarea, select {
 
 @media (max-width: 760px) {
 	.pair-card { grid-template-columns: 1fr; gap: 32px; padding: 28px; }
+	.pair-code { justify-self: center; }
 }
 
-.pair-brand {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	font-weight: 700;
-	font-size: 15px;
-	letter-spacing: 0.02em;
-	color: var(--brand-deep);
-	margin-bottom: 26px;
+/*
+ * The reference puts a "stay signed in" line under the steps. Here it is a statement rather
+ * than a checkbox: the pairing grant persists until it is revoked, so a control that could only
+ * ever be on would be a lie.
+ */
+.pair-stay {
+	margin: 22px 0 0;
+	padding-top: 18px;
+	border-top: 1px solid var(--outline-soft);
+	color: var(--on-muted);
+	font-size: 14px;
 }
 
-[data-theme='dark'] .pair-brand { color: var(--sky-light); }
-
-.pair-dot {
-	width: 28px;
-	height: 28px;
-	border-radius: 9px;
-	background: var(--brand-deep);
-}
+.pair-devices { margin-top: 20px; }
+.pair-devices .card { box-shadow: var(--shadow); }
 
 .pair-card h1 {
 	font-size: 27px;
@@ -203,6 +239,14 @@ button, input, textarea, select {
 
 .pair-status.err { color: var(--danger); }
 .pair-status.ok { color: var(--ok); }
+
+/* ----------------------------------------------------- connected devices */
+/*
+ * A device row is an ordinary settings row with a destructive button on the end. It keeps the
+ * tile so the list reads as "things", not as a table, and matches the rest of Settings.
+ */
+.row.device { gap: 12px; }
+.row.device .btn { flex: 0 0 auto; }
 
 /* --------------------------------------------------------------- shell */
 /*
@@ -376,6 +420,21 @@ button, input, textarea, select {
 	font-size: 14px;
 	flex: 0 0 auto;
 	user-select: none;
+	overflow: hidden;
+}
+
+/*
+ * With a Google picture the chip is the picture, so it drops the tint it would otherwise be
+ * painted with; a coloured disc behind an opaque photo is just a ring of the wrong colour at the
+ * antialiased edge.
+ */
+.rail-me.has-photo { background: none; }
+
+.rail-me img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block;
 }
 
 /*
