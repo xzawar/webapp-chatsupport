@@ -1322,7 +1322,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 	 * two PNGs cost 48KB each once and nothing after that.
 	 */
 	--chat-bg-image: url('chat-bg-light.png');
-	--chat-bg-size: 380px auto;
+	--chat-bg-size: 560px auto;
 	--ios-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, system-ui, sans-serif;
 }
 
@@ -1521,3 +1521,48 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 
 .btn.ghost:hover { background: var(--surface-high); }
+
+/* --------------------------------------------------- supplied wallpapers
+ *
+ * The sheets arrive with their own flat backing - white on the light one, #2d2d2d on the dark
+ * one - so the panel colour is matched to the sheet instead of the other way round. That is
+ * what hides the tile seams: every edge of the tile is already the page colour.
+ */
+:root { --wallpaper: #ffffff; }
+[data-theme='dark'] { --wallpaper: #2d2d2d; }
+
+/*
+ * Both backings sit close to the incoming bubble colour, so the bubbles need help holding
+ * their edge - a hairline in light, a darker fill in dark.
+ */
+.msg-wrap:not(.out) .bubble {
+	border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+[data-theme='dark'] .msg-wrap:not(.out) .bubble {
+	background: #1c1c1c;
+	border-color: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme='dark'] .daystamp,
+[data-theme='dark'] .sysline {
+	background: color-mix(in srgb, #1c1c1c 82%, transparent);
+}
+
+/* ------------------------------------------------------------- stacking
+ *
+ * .thread::before is a full-bleed pseudo element, so it paints after the panel and lands on
+ * top of anything that has not claimed a layer. With a faint keyed-out tile nobody noticed;
+ * with the supplied sheets the doodles were sitting over the bubbles. The wallpaper is pinned
+ * to layer 0 and everything that has to read over it is lifted above.
+ */
+.thread::before { z-index: 0; }
+
+.msgs,
+.composer,
+.startbar,
+.thread-foot,
+#threadFoot {
+	position: relative;
+	z-index: 1;
+}
