@@ -1306,3 +1306,218 @@ body.resizing { user-select: none; cursor: col-resize; }
 .plan ul { list-style: none; padding: 0; margin: 14px 0 18px; }
 .plan li { padding: 5px 0; font-size: 14px; display: flex; gap: 9px; align-items: center; }
 .plan li svg { width: 16px; height: 16px; color: var(--ok); flex: 0 0 auto; }
+
+/* ==========================================================================
+   1.4.0 - the thread, redrawn iOS-side
+
+   Everything here overrides a rule further up rather than editing it in place. The blocks
+   above are the shared console; this is the chat surface specifically, and keeping it in one
+   place means the next pass on it is one section rather than a hunt.
+   ========================================================================== */
+
+:root {
+	/*
+	 * The doodle wallpaper, baked at two different opacities rather than tinted at runtime.
+	 * A CSS filter would have to run over the whole repeating layer on every scroll frame;
+	 * two PNGs cost 48KB each once and nothing after that.
+	 */
+	--chat-bg-image: url('chat-bg-light.png');
+	--chat-bg-size: 380px auto;
+	--ios-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, system-ui, sans-serif;
+}
+
+[data-theme='dark'] {
+	--chat-bg-image: url('chat-bg-dark.png');
+}
+
+/* ------------------------------------------------------------- wallpaper */
+.thread::before,
+[data-theme='dark'] .thread::before {
+	background-color: var(--wallpaper);
+	background-image: var(--chat-bg-image);
+	background-size: var(--chat-bg-size);
+	background-repeat: repeat;
+	background-position: center top;
+}
+
+.thread,
+.thread-head {
+	font-family: var(--ios-font);
+}
+
+/* ---------------------------------------------------------------- header
+ *
+ * The old header let the avatar and the name size themselves, so a long visitor name pushed
+ * the buttons off the end and the disc stretched to fill whatever height the text asked for.
+ * Everything in here is now fixed or truncated: the bar is 54px, the disc is 34px and cannot
+ * shrink, and both lines of text ellipsis.
+ */
+.thread-head {
+	flex: 0 0 54px;
+	height: 54px;
+	gap: 4px;
+	padding: 0 8px;
+	border-bottom: 1px solid var(--outline-soft);
+	background: color-mix(in srgb, var(--surface) 84%, transparent);
+	-webkit-backdrop-filter: saturate(180%) blur(20px);
+	backdrop-filter: saturate(180%) blur(20px);
+}
+
+.thread-head .icon-btn {
+	flex: none;
+	width: 34px;
+	height: 34px;
+	border-radius: 50%;
+}
+
+.thread-head .icon-btn svg { width: 21px; height: 21px; }
+.thread-head .icon-btn.locked { color: var(--danger); }
+
+.thread-who {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	gap: 9px;
+	padding: 3px 6px;
+	border-radius: 10px;
+}
+
+.thread-who .conv-av {
+	flex: none;
+	width: 34px;
+	height: 34px;
+	min-width: 34px;
+	font-size: 13px;
+}
+
+.thread-who > span {
+	min-width: 0;
+	overflow: hidden;
+}
+
+.thread-who b {
+	font-size: 15px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	line-height: 1.25;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.thread-who > span > span {
+	font-size: 12px;
+	line-height: 1.25;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* --------------------------------------------------------------- bubbles
+ *
+ * iOS shape rules: one continuous 20px radius, squared off at the corner nearest the sender,
+ * a hairline shadow rather than a card shadow, and 15px text. Runs of messages sit 2px apart
+ * so a burst reads as one block.
+ */
+.msgs {
+	padding: 14px 10px 8px;
+	gap: 2px;
+}
+
+.bubble {
+	max-width: min(62%, 520px);
+	padding: 7px 13px;
+	border-radius: 20px;
+	font-size: 15px;
+	line-height: 1.33;
+	box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.08);
+}
+
+.msg-wrap.out .bubble { border-bottom-right-radius: 6px; }
+.msg-wrap:not(.out) .bubble { border-bottom-left-radius: 6px; }
+
+[data-theme='dark'] .bubble { box-shadow: none; }
+
+.meta {
+	font-size: 10.5px;
+	opacity: 0.8;
+}
+
+/*
+ * Day and system lines sit on the wallpaper now, so they need their own backing or the
+ * doodles read straight through the text. Translucent and blurred, the way iOS does its
+ * floating date pill.
+ */
+.daystamp,
+.sysline {
+	background: color-mix(in srgb, var(--surface) 76%, transparent);
+	-webkit-backdrop-filter: blur(8px);
+	backdrop-filter: blur(8px);
+	box-shadow: none;
+}
+
+/* -------------------------------------------------------------- composer */
+.composer {
+	padding: 8px 12px 14px;
+	gap: 8px;
+	align-items: flex-end;
+}
+
+.composer textarea {
+	border-radius: 20px;
+	border: 1px solid var(--outline);
+	background: var(--surface);
+	padding: 9px 14px;
+	font-family: var(--ios-font);
+	font-size: 15px;
+	line-height: 1.33;
+}
+
+.send-btn {
+	width: 34px;
+	height: 34px;
+	border-radius: 50%;
+	flex: none;
+}
+
+/* ------------------------------------------------------------ locked bar
+ *
+ * What a locked thread shows instead of a composer. It carries the way back out, because the
+ * only other way to unlock was the button in the header and it is not obvious that the two
+ * are the same control.
+ */
+.startbar.locked {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	padding: 12px;
+}
+
+.lock-note {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 13px;
+	color: var(--on-muted);
+	background: color-mix(in srgb, var(--surface) 82%, transparent);
+	-webkit-backdrop-filter: blur(8px);
+	backdrop-filter: blur(8px);
+	padding: 7px 14px;
+	border-radius: 999px;
+}
+
+.lock-note svg {
+	width: 15px;
+	height: 15px;
+	flex: none;
+}
+
+.btn.ghost {
+	background: transparent;
+	color: var(--brand);
+	border: 1px solid var(--outline);
+	font-weight: 600;
+}
+
+.btn.ghost:hover { background: var(--surface-high); }

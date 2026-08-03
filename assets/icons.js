@@ -50,11 +50,20 @@ export const ICONS = {
 	database: `${open}<ellipse cx="12" cy="6.2" rx="7.2" ry="3"/><path d="M4.8 6.2v11.6c0 1.66 3.22 3 7.2 3s7.2-1.34 7.2-3V6.2"/><path d="M4.8 12c0 1.66 3.22 3 7.2 3s7.2-1.34 7.2-3"/></svg>`,
 
 	/*
-	 * A six-tooth gear rather than the eight-lobed path this used to be. The old one was a
-	 * single 700-character path that turned to mush below 18px; at rail size the teeth have to
-	 * be countable or it just looks like a smudged circle.
+	 * Traced from the gear the client supplied: eight rounded teeth around a hollow hub,
+	 * drawn at 1.9 rather than 1.6 so it carries the same weight as that artwork. The path
+	 * is generated, so every tooth is identical - the previous six-spoke version was hand
+	 * written and visibly lopsided at rail size.
 	 */
-	settings: `${open}<circle cx="12" cy="12" r="3.1"/><path d="M12 2.6v2.6M12 18.8v2.6M20.1 7.3l-2.25 1.3M6.15 15.4l-2.25 1.3M20.1 16.7l-2.25-1.3M6.15 8.6 3.9 7.3"/></svg>`,
+	settings: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9.37 5.14 L9.72 2.11 L14.28 2.11 L14.63 5.14 L14.99 5.29 L17.38 3.39 L20.61 6.62 L18.71 9.01 L18.86 9.37 L21.89 9.72 L21.89 14.28 L18.86 14.63 L18.71 14.99 L20.61 17.38 L17.38 20.61 L14.99 18.71 L14.63 18.86 L14.28 21.89 L9.72 21.89 L9.37 18.86 L9.01 18.71 L6.62 20.61 L3.39 17.38 L5.29 14.99 L5.14 14.63 L2.11 14.28 L2.11 9.72 L5.14 9.37 L5.29 9.01 L3.39 6.62 L6.62 3.39 L9.01 5.29 Z"/><circle cx="12" cy="12" r="4.05"/></svg>`,
+
+	/*
+	 * Lock and unlock: the client's padlock, and the closed version of the same drawing.
+	 * Identical body and keyhole in both, so the pair reads as one control in two states -
+	 * only the shackle moves.
+	 */
+	lock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4.7" y="10.3" width="14.6" height="10.5" rx="2.9"/><path d="M8.3 10.3V7.7a3.7 3.7 0 0 1 7.4 0v2.6"/><circle cx="12" cy="14.7" r="1.45" fill="currentColor" stroke="none"/><path d="M12 15.5v2.3"/></svg>`,
+	unlock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4.7" y="10.3" width="14.6" height="10.5" rx="2.9"/><path d="M8.3 10.3V7.5a3.7 3.7 0 0 1 7.05-1.5"/><circle cx="12" cy="14.7" r="1.45" fill="currentColor" stroke="none"/><path d="M12 15.5v2.3"/></svg>`,
 
 	help: `${open}<circle cx="12" cy="12" r="8.6"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.4 2.35c-.72.3-1 .86-1 1.6v.35"/><path d="M12 16.9h.01"/></svg>`,
 	image: `${open}<rect x="2.8" y="4.4" width="18.4" height="15.2" rx="3.4"/><circle cx="8.6" cy="9.6" r="1.9"/><path d="m3.6 16.8 4.4-3.8a2 2 0 0 1 2.6 0l2.2 1.9 2-1.7a2 2 0 0 1 2.6 0l3 2.6"/></svg>`,

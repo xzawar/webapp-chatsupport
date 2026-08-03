@@ -653,6 +653,10 @@ function watchConversations() {
 			state.conversations = rows;
 			state.convosLoaded = true;
 			if (state.page === 'chats') renderInbox();
+			// The open thread has to be redrawn as well. Without this, a lock applied from the
+			// phone or a second browser left this thread's header and composer stale until a
+			// message arrived and watchMessages() happened to redraw it.
+			if (state.openId) renderThread();
 			renderRail();
 		},
 		() => {
@@ -755,6 +759,26 @@ async function sendMessage(text) {
 }
 
 async function setStatusOf(conversationId, status) {
+	/*
+	 * Paint first, write second.
+	 *
+	 * This is the "it only locks after I send a message" bug. Locking used to do nothing but
+	 * the write below, and the conversations listener that answers that write calls
+	 * renderInbox() and renderRail() - never renderThread(). So the open thread kept its old
+	 * header and its old composer until something else forced a thread redraw, and the only
+	 * thing that did that was watchMessages() firing when a message went out.
+	 *
+	 * The local row is updated here and the thread is redrawn straight away. The listener
+	 * still confirms it a moment later with the server's copy; if the write fails, the catch
+	 * below puts the old status back.
+	 */
+	const row = state.conversations.find((c) => c.id === conversationId);
+	const previous = row ? row.status : null;
+	if (row) {
+		row.status = status;
+		renderInbox();
+		if (state.openId === conversationId) renderThread();
+	}
 	try {
 		const updates = { [`chats/${state.tenantId}/conversations/${conversationId}/status`]: status };
 		if (status === 'open') {
@@ -781,6 +805,11 @@ async function setStatusOf(conversationId, status) {
 		}
 		toast(status === 'closed' ? 'Conversation closed.' : 'Chat started.');
 	} catch (err) {
+		if (row && previous) {
+			row.status = previous;
+			renderInbox();
+			if (state.openId === conversationId) renderThread();
+		}
 		toast('Could not update that conversation.');
 	}
 }
@@ -1054,19 +1083,13 @@ function renderThread() {
 	 * Both directions. Closing was already here; reopening was not, so a thread closed by
 	 * mistake could only be brought back from the phone. setStatusOf already accepted 'open'.
 	 */
-	if (convo.status === 'closed') {
-		const reopen = el('button', 'icon-btn');
-		reopen.innerHTML = ICONS.reopenTicket;
-		reopen.title = 'Reopen conversation';
-		reopen.onclick = () => setStatusOf(convo.id, 'open');
-		head.appendChild(reopen);
-	} else {
-		const close = el('button', 'icon-btn');
-		close.innerHTML = ICONS.closeTicket;
-		close.title = 'Close conversation';
-		close.onclick = () => setStatusOf(convo.id, 'closed');
-		head.appendChild(close);
-	}
+	const locked = convo.status === 'closed';
+	const bolt = el('button', 'icon-btn' + (locked ? ' locked' : ''));
+	bolt.innerHTML = locked ? ICONS.unlock : ICONS.lock;
+	bolt.title = locked ? 'Unlock this chat' : 'Lock this chat';
+	bolt.setAttribute('aria-label', bolt.title);
+	bolt.onclick = () => setStatusOf(convo.id, locked ? 'open' : 'closed');
+	head.appendChild(bolt);
 
 	// -------- messages
 	const atBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 90;
@@ -1111,8 +1134,14 @@ function renderThread() {
 		return;
 	}
 	if (convo.status === 'closed') {
-		const bar = el('div', 'startbar');
-		bar.appendChild(el('span', 'conn-pill', 'This conversation is closed'));
+		const bar = el('div', 'startbar locked');
+		const note = el('span', 'lock-note');
+		note.innerHTML = ICONS.lock;
+		note.appendChild(el('span', null, 'This chat is locked'));
+		bar.appendChild(note);
+		const undo = el('button', 'btn ghost', 'Unlock');
+		undo.onclick = () => setStatusOf(convo.id, 'open');
+		bar.appendChild(undo);
 		foot.appendChild(bar);
 		return;
 	}
