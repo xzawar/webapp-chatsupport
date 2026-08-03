@@ -135,7 +135,6 @@ export const ICONS_EXTRA = {
 	// social have no separate filled entry here because the versions above are already the
 	// app's own traced artwork.
 	mailFilled: `${solid}<path d="M6.2 5h11.6a3.4 3.4 0 0 1 3.4 3.4v7.2a3.4 3.4 0 0 1 -3.4 3.4h-11.6a3.4 3.4 0 0 1 -3.4 -3.4v-7.2a3.4 3.4 0 0 1 3.4 -3.4zM4.05 7.55 10.9 12.1a2 2 0 0 0 2.2 0l6.85-4.55 1.1 1.7-6.85 4.55a4 4 0 0 1-4.4 0L2.95 9.25z"/></svg>`,
-	callFilled: `${solid}<path d="M8.5 4.2 10.6 8a1.6 1.6 0 0 1-0.3 1.9l-1.4 1.3a12.4 12.4 0 0 0 4 4l1.3-1.4a1.6 1.6 0 0 1 1.9-0.3l3.8 2.1a1.7 1.7 0 0 1 0.8 1.9l-0.5 1.9a2.2 2.2 0 0 1-2.4 1.6C11.4 20.2 3.8 12.6 3 5.8A2.2 2.2 0 0 1 4.6 3.4l1.9-0.5a1.7 1.7 0 0 1 2 0.8z"/></svg>`,
 
 	// ic_wifi_solid, ic_window_solid, ic_zap_solid, ic_rocket_solid - connection state, the
 	// pairing card, the plan upsell, and onboarding.

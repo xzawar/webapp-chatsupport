@@ -800,7 +800,6 @@ async function setStatusOf(conversationId, status) {
 const PAGES = [
 	{ id: 'chats',      label: 'Chats',            icon: 'chat',     rail: true },
 	{ id: 'emails',     label: 'Email',            icon: 'mail',     rail: true, feature: FEATURE_EMAIL },
-	{ id: 'calls',      label: 'Phone call',       icon: 'call',     rail: true },
 	{ id: 'social',     label: 'Social media',     icon: 'social',   rail: true, feature: FEATURE_SOCIAL },
 	{ id: 'settings',   label: 'Settings',         icon: 'settings' },
 	{ id: 'help',       label: 'Help and contact', icon: 'help' },
@@ -930,7 +929,6 @@ function showPage(id) {
 
 	if (id === 'chats') renderInbox();
 	if (id === 'emails') renderEmails();
-	if (id === 'calls') renderCalls();
 	if (id === 'social') renderSocial();
 	if (id === 'settings') renderSettings();
 	if (id === 'help') renderHelp();
@@ -1278,16 +1276,6 @@ async function loadLeads() {
 	} catch (err) {
 		state.leads = [];
 	}
-}
-
-function renderCalls() {
-	const host = $('#page-calls');
-	host.innerHTML = '';
-	const wrap = el('div', 'wrap');
-	const card = el('div', 'card');
-	card.appendChild(emptyState('call', 'Phone call', 'Call features are managed in the app. Use the app to initiate or receive calls from visitors.'));
-	wrap.appendChild(card);
-	host.appendChild(wrap);
 }
 
 function renderSocial() {
