@@ -189,68 +189,14 @@ function toast(message) {
  * field holds and adding a prefix on the phone would waste bytes in a 20 KB budget. The prefix is
  * added here instead, which is the only place it is needed.
  */
-/*
- * Base64 magic prefixes, so a PNG is not announced as a JPEG. Browsers sniff the real type
- * anyway, but a correct data URI is one less thing behaving differently across browsers.
- */
-const PHOTO_MAGIC = [
-	['/9j/', 'image/jpeg'],
-	['iVBORw0KGgo', 'image/png'],
-	['R0lGOD', 'image/gif'],
-	['UklGR', 'image/webp'],
-];
-
-/*
- * Turn whatever the tenant document holds into something an <img> can take.
- *
- * The field is documented as base64 text, but a Firestore field written as Bytes on the phone
- * comes back through the web SDK as a Bytes object rather than a string. String()-ing that
- * yields "[object Object]", which is truthy, so it was wrapped in a data: prefix and handed to
- * an <img> as "data:image/jpeg;base64,[object Object]". The image then failed to decode, the
- * error handler swapped in the coloured letter, and the result was indistinguishable from
- * having no picture at all - which is exactly the symptom this function was written to fix.
- *
- * Anything unrecognised returns '' so the caller falls through to photoUrl and then to the
- * letter, rather than pointing an <img> at a string that cannot possibly decode.
- */
-function normalisePhoto(value) {
-	if (value == null) return '';
-
-	let b64 = '';
-	if (typeof value === 'string') {
-		b64 = value.trim();
-	} else if (typeof value.toBase64 === 'function') {
-		// Firestore Bytes, and anything else exposing the same accessor.
-		b64 = String(value.toBase64() || '').trim();
-	} else if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
-		const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
-		let raw = '';
-		for (const byte of bytes) raw += String.fromCharCode(byte);
-		b64 = btoa(raw);
-	} else {
-		return '';
-	}
-
-	if (!b64) return '';
-	// Already a data URI or an http(s) URL? Use it untouched. Only bare base64 gets wrapped.
-	if (/^(data:|https?:)/i.test(b64)) return b64;
-
-	// Stored base64 has been seen carrying newlines from line-wrapped encoders.
-	b64 = b64.replace(/\s+/g, '');
-	if (!/^[A-Za-z0-9+/_=-]+$/.test(b64)) return '';
-	b64 = b64.replace(/-/g, '+').replace(/_/g, '/'); // url-safe alphabet
-
-	let mime = 'image/jpeg';
-	for (const [prefix, type] of PHOTO_MAGIC) {
-		if (b64.startsWith(prefix)) { mime = type; break; }
-	}
-	return 'data:' + mime + ';base64,' + b64;
-}
-
 function ownerPhotoSrc(tenant) {
 	if (!tenant) return '';
-	const stored = normalisePhoto(tenant.ownerPhoto);
-	if (stored) return stored;
+	const stored = String(tenant.ownerPhoto || '').trim();
+	if (stored) {
+		// Already a data URI or an http(s) URL? Use it untouched. Only bare base64 gets wrapped.
+		if (/^(data:|https?:)/i.test(stored)) return stored;
+		return 'data:image/jpeg;base64,' + stored;
+	}
 	return String(tenant.photoUrl || tenant.ownerPhotoUrl || '').trim();
 }
 

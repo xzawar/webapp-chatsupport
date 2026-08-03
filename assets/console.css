@@ -1321,12 +1321,12 @@ body.resizing { user-select: none; cursor: col-resize; }
 	 * A CSS filter would have to run over the whole repeating layer on every scroll frame;
 	 * two PNGs cost 48KB each once and nothing after that.
 	 *
-	 * The sheets ship at their full 564px source width but are drawn at 165px, so the doodles
-	 * read small and there are ~3.4 source pixels behind every drawn one. That headroom is
+	 * The sheets ship at their full 564px source width but are drawn at 200px, so the doodles
+	 * read small and there are ~2.8 source pixels behind every drawn one. That headroom is
 	 * what keeps the edges clean on retina rather than resampling mush.
 	 */
 	--chat-bg-image: url('chat-bg-light.png');
-	--chat-bg-size: 165px auto;
+	--chat-bg-size: 200px auto;
 	--ios-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, system-ui, sans-serif;
 }
 
@@ -1583,4 +1583,178 @@ body.resizing { user-select: none; cursor: col-resize; }
 #threadFoot {
 	position: relative;
 	z-index: 1;
+}
+
+/* ==========================================================================
+   1.4.3 - light appearance contrast pass
+
+   Scoped to `html:not([data-theme='dark'])` so the dark palette above is left exactly as it
+   was. Everything here exists because a value in the light set did not clear WCAG AA, or
+   because two surfaces that are supposed to be different objects were painted the same colour.
+
+   Measured against the surface each token actually sits on, not against paper white:
+
+     --on-muted  #777777 on #ffffff  4.48:1  <- under 4.5, and it is the colour of every
+                 preview line, timestamp and caption in the console
+                 #5f6368 on #ffffff  6.05:1, on #ededed 5.17:1
+
+     white on --bubble-out #3390ec   3.31:1  <- outgoing message text. Body copy, so it needs
+                 4.5. #1c72c9 gives 4.88:1 and is still visibly the same blue.
+
+     white on --brand-deep #2b7fd4   4.13:1  <- buttons, the active rail tile, the send key
+                 #1668bd  5.60:1, and 5.09:1 as text on the #f4f4f4 page
+
+     white on --ok #1e9e52           3.46:1  <- the unread pill
+                 #12833f  4.83:1
+
+     white on --danger #e14545       4.09:1  <- the rail badge
+                 #cc2f2f  5.23:1
+
+   The second half of the block is separation rather than text contrast: white panels sitting
+   on white panels with no edge between them, and white bubbles on a white wallpaper.
+   ========================================================================== */
+
+html:not([data-theme='dark']) {
+	--on-muted: #5f6368;
+	--outline: #cfd3d8;
+	--outline-soft: #e2e5e9;
+	--brand-deep: #1668bd;
+	--brand-pressed: #1668bd;
+	--bubble-out: #1c72c9;
+	--ok: #12833f;
+	--danger: #cc2f2f;
+	--surface-high: #eaecef;
+	--surface-higher: #dfe2e6;
+	/* The incoming bubble can no longer be the same white as the wallpaper sheet. */
+	--bubble-in: #f1f3f6;
+}
+
+/* ---------------------------------------------------------- panel edges
+ * The rail, the inbox, the topbar and the thread were all --surface or near it, so the console
+ * read as one undivided white field. Each panel now states its own edge.
+ */
+html:not([data-theme='dark']) .rail {
+	background: #f7f8fa;
+	border-right: 1px solid var(--outline);
+}
+
+html:not([data-theme='dark']) .topbar,
+html:not([data-theme='dark']) .thread-head {
+	border-bottom: 1px solid var(--outline);
+}
+
+html:not([data-theme='dark']) .inbox {
+	border-right: 1px solid var(--outline);
+}
+
+html:not([data-theme='dark']) .inbox-resizer::after {
+	background: var(--outline);
+}
+
+/* ------------------------------------------------------ conversation list
+ * Hover and selected were both --surface-high, so the row under the pointer and the thread you
+ * are actually in looked identical. Selected keeps a brand tint plus a 3px marker; hover stays
+ * neutral and lighter.
+ */
+html:not([data-theme='dark']) .conv { position: relative; }
+html:not([data-theme='dark']) .conv:hover { background: #f2f4f7; }
+
+html:not([data-theme='dark']) .conv.on {
+	background: #e6f0fb;
+	box-shadow: inset 3px 0 0 var(--brand-deep);
+}
+
+html:not([data-theme='dark']) .conv.on .conv-prev,
+html:not([data-theme='dark']) .conv.on .conv-time { color: #4a5560; }
+
+/* The search field: a pill with no edge on a white panel is invisible until it is focused. */
+html:not([data-theme='dark']) .search-pill {
+	background: #f1f3f6;
+	border: 1px solid var(--outline);
+}
+
+html:not([data-theme='dark']) ::placeholder { color: #6b7075; opacity: 1; }
+
+html:not([data-theme='dark']) .chip-btn { color: #2a2e33; }
+
+/* --------------------------------------------------------------- bubbles
+ * The supplied wallpaper sheet is white and the incoming bubble was white, so an incoming
+ * message was a hairline rectangle. It now has its own fill and a real border.
+ */
+html:not([data-theme='dark']) .msg-wrap:not(.out) .bubble {
+	background: var(--bubble-in);
+	border: 1px solid #dcdfe4;
+	box-shadow: 0 1px 1px rgba(15, 15, 15, 0.05);
+}
+
+html:not([data-theme='dark']) .msg-wrap.out .bubble {
+	box-shadow: 0 1px 1px rgba(15, 15, 15, 0.10);
+}
+
+/* 10.5px text at 0.8 opacity was the least legible thing on the screen in either bubble. */
+html:not([data-theme='dark']) .meta { opacity: 1; color: #5f6368; }
+html:not([data-theme='dark']) .msg-wrap.out .meta { color: rgba(255, 255, 255, 0.92); }
+
+/* Day and system pills were a 76% white wash on a white sheet, i.e. nothing at all. */
+html:not([data-theme='dark']) .daystamp,
+html:not([data-theme='dark']) .sysline {
+	background: #eceff3;
+	color: #4a5058;
+	border: 1px solid #dfe3e8;
+}
+
+html:not([data-theme='dark']) .lock-note {
+	background: #eceff3;
+	border: 1px solid #dfe3e8;
+}
+
+/* -------------------------------------------------------------- composer */
+html:not([data-theme='dark']) .composer textarea {
+	border: 1px solid var(--outline);
+	box-shadow: 0 1px 2px rgba(15, 15, 15, 0.06);
+}
+
+html:not([data-theme='dark']) .send-btn {
+	box-shadow: 0 2px 8px rgba(22, 104, 189, 0.30);
+}
+
+/* ------------------------------------------------------------ status bits */
+html:not([data-theme='dark']) .conn-pill {
+	background: #eaecef;
+	border: 1px solid var(--outline);
+	color: #3f4550;
+}
+
+html:not([data-theme='dark']) .tag.closed {
+	background: #e7eaee;
+	color: #4a5058;
+}
+
+html:not([data-theme='dark']) .tag.pending {
+	background: #fbe8c8;
+	color: #7a4e05;
+}
+
+html:not([data-theme='dark']) .switch { background: #c4c9cf; }
+
+html:not([data-theme='dark']) .row-val,
+html:not([data-theme='dark']) .row-main span,
+html:not([data-theme='dark']) .stat span,
+html:not([data-theme='dark']) .note,
+html:not([data-theme='dark']) .card-title { color: #5f6368; }
+
+/* ----------------------------------------------------------- focus rings
+ * Only the rail had one. Everything interactive gets the same ring, in the darkened brand so
+ * it clears 3:1 against both the white panels and the #f4f4f4 page.
+ */
+html:not([data-theme='dark']) .icon-btn:focus-visible,
+html:not([data-theme='dark']) .btn:focus-visible,
+html:not([data-theme='dark']) .chip-btn:focus-visible,
+html:not([data-theme='dark']) .conv:focus-visible,
+html:not([data-theme='dark']) .field:focus-visible,
+html:not([data-theme='dark']) .send-btn:focus-visible,
+html:not([data-theme='dark']) .composer textarea:focus-visible,
+html:not([data-theme='dark']) .search-pill input:focus-visible {
+	outline: 2px solid var(--brand-deep);
+	outline-offset: 2px;
 }
