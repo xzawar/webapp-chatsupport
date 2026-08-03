@@ -1349,67 +1349,71 @@ function settingsRow(icon, tint, title, sub, control) {
 		'</div>';
 }
 
+/*
+ * Settings, trimmed to what a browser can actually change.
+ *
+ * The previous version listed fourteen rows across five cards, and nine of them were marked
+ * `app-only`: Link your website, Link a computer, Link social media accounts, Subscription,
+ * Autostart, Chat wallpaper and friends. Tapping any of them did one thing - raise a toast
+ * saying "Change this in Support Chat on your phone". That is not a setting, it is an
+ * advertisement for a setting somewhere else, and nine of them buried the four rows that do
+ * something behind a wall of dead ends.
+ *
+ * What is left is exactly the set of things this browser owns:
+ *
+ *   - who it is signed in as, stated once, as a fact rather than a control
+ *   - notification permission, which is granted per browser and cannot be set from the phone
+ *   - dark mode, which is stored in this browser's localStorage
+ *   - the paired browser list, because revoking one is a console job
+ *   - clear local cache and log out, which only exist on this side
+ *   - help
+ *
+ * "Stay connected" went with the app-only rows. Its toggle was hardcoded to `on` and its
+ * handler only ever printed a sentence: the browser listens while the tab is open and there is
+ * no state behind the switch to flip.
+ *
+ * Storage and data lost its dialog. The sheet held two rows, one of which was a second Log out
+ * next to the Log out card directly below it; clearing the cache is now the row itself.
+ */
 function renderSettings() {
 	const dark = document.documentElement.dataset.theme === 'dark';
 	const tenant = state.tenant || {};
 	const email = tenant.email || 'Signed in on this browser';
-	const site = (state.website && (state.website.domain || state.website.url)) || 'No website linked yet';
 	const plan = tenant.planName || tenant.plan || 'Free';
 	const T = SETTING_TINTS;
+	const notify = Notification.permission === 'granted';
 
 	const html = '<div class="wrap">' +
 
-		'<div class="card"><div class="card-title">Account</div>' +
-		settingsRow(ICONS.person, T.blue, email, 'Signed in', 'app') +
-		settingsRow(ICONS.globe, T.teal, 'Link your website', site, 'app') +
-		// A monitor, not the website globe. "Link your website" sits directly above and the two
-		// rows carrying the same picture made them read as one setting.
-		settingsRow(ICONS.monitor, T.purple, 'Link a computer', 'This browser is paired', 'app') +
-		settingsRow(ICONS.social, T.pink, 'Link social media accounts',
-			'Connect Instagram, Facebook and WhatsApp.', 'app') +
-		settingsRow(ICONS.card, T.indigo, 'Subscription', plan + ' plan', 'app') +
+		'<div class="card"><div class="card-title">This browser</div>' +
+		settingsRow(ICONS.person, T.blue, email, plan + ' plan · signed in on this browser') +
+		settingsRow(ICONS.bell, T.orange, 'Instant notifications',
+			notify ? 'Allowed for this browser' : 'Not allowed yet',
+			'<button class="switch' + (notify ? ' on' : '') + '" id="notifToggle"></button>') +
+		settingsRow(ICONS.moon, T.indigo, 'Dark mode', 'Applies to this browser only.',
+			'<button class="switch' + (dark ? ' on' : '') + '" id="darkToggle"></button>') +
 		'</div>' +
 
 		/*
-		 * Connected devices. The list is filled in by paintDeviceList once RTDB answers rather
-		 * than rendered inline, because settings is drawn synchronously on every tab switch and
-		 * blocking it on a network read would stall the whole page.
+		 * Still filled in by paintDeviceList after RTDB answers, not inline: settings is drawn
+		 * synchronously on every tab switch and must not block on a network read.
 		 */
-		'<div class="card"><div class="card-title">Connected devices</div>' +
+		'<div class="card"><div class="card-title">Paired browsers</div>' +
 		'<div id="deviceList"><div class="row"><div class="row-main"><b>Looking for paired ' +
 		'browsers…</b><span>This takes a moment.</span></div></div></div>' +
 		'</div>' +
 
-		'<div class="card"><div class="card-title">Notifications</div>' +
-		settingsRow(ICONS.broadcast, T.green, 'Stay connected', 'Keeps this browser listening for new chats.',
-			'<button class="switch on" id="stayToggle"></button>') +
-		settingsRow(ICONS.bell, T.orange, 'Allow instant notifications',
-			Notification.permission === 'granted' ? 'Allowed for this browser' : 'Not allowed yet',
-			`<button class="switch${Notification.permission === 'granted' ? ' on' : ''}" id="notifToggle"></button>`) +
-		settingsRow(ICONS.power, T.red, 'Autostart', 'Set on your phone.', 'app') +
-		'</div>' +
-
-		'<div class="card"><div class="card-title">Appearance</div>' +
-		settingsRow(ICONS.moon, T.indigo, 'Dark mode', 'Follows this browser only.',
-			`<button class="switch${dark ? ' on' : ''}" id="darkToggle"></button>`) +
-		settingsRow(ICONS.image, T.pink, 'Chat wallpaper', 'Set on your phone.', 'app') +
-		'</div>' +
-
-		'<div class="card"><div class="card-title">Other</div>' +
-		settingsRow(ICONS.database, T.plum, 'Storage and data', 'Log this browser out or clear its cache.',
-			'<button class="btn ghost sm" id="storageBtn">Manage</button>') +
+		'<div class="card">' +
+		settingsRow(ICONS.database, T.plum, 'Clear local cache',
+			'Forgets the saved pairing on this browser only.',
+			'<button class="btn ghost sm" id="clearCacheBtn">Clear</button>') +
 		settingsRow(ICONS.help, T.bronze, 'Help and contact', 'Reach the team.',
 			'<button class="btn ghost sm" id="helpBtn">Open</button>') +
 		'</div>' +
 
 		/*
-		 * Log out gets its own card at the end rather than a row inside Other.
-		 *
-		 * It was previously only reachable by opening Storage and data and reading to the
-		 * bottom of a sheet, which is three steps and a wrong-looking place for it. Signing out
-		 * is a destination in its own right, so it sits alone, last, in the danger colour, where
-		 * a destructive action is expected to be and where it cannot be hit by accident on the
-		 * way to something else.
+		 * Log out keeps its own card at the end, in the danger colour, where a destructive
+		 * action is expected and where it cannot be hit on the way to something else.
 		 */
 		'<div class="card">' +
 		settingsRow(ICONS.logout, T.red, 'Log out', 'Unpairs this browser. Your phone stays signed in.',
@@ -1421,18 +1425,11 @@ function renderSettings() {
 	$('#page-settings').innerHTML = html;
 	paintDeviceList();
 
-	// Rows the phone owns say so once, rather than looking broken.
-	for (const row of document.querySelectorAll('#page-settings .row.app-only')) {
-		row.onclick = () => toast('Change this in Support Chat on your phone.');
-	}
-
 	$('#darkToggle').onclick = (e) => {
 		const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
 		applyTheme(next);
 		e.currentTarget.classList.toggle('on', next === 'dark');
 	};
-
-	$('#stayToggle').onclick = () => toast('This browser stays connected while the tab is open.');
 
 	$('#notifToggle').onclick = async (e) => {
 		if (Notification.permission === 'granted') {
@@ -1443,34 +1440,9 @@ function renderSettings() {
 		e.currentTarget.classList.toggle('on', result === 'granted');
 	};
 
-	/*
-	 * Storage and data is a dialog rather than a page. The app has a whole screen for it, but the
-	 * only two things it can do in a browser are these, and a page holding two rows next to five
-	 * that say "set on your phone" was not worth a nav entry.
-	 */
-	$('#storageBtn').onclick = () => {
-		const shut = openSheet('Storage and data',
-			'<div class="card">' +
-			'<div class="row"><div class="row-main"><b>Clear local cache</b>' +
-			'<span>Removes the saved pairing from this browser only.</span></div>' +
-			'<button class="btn ghost sm" id="clearLocal">Clear</button></div>' +
-			'<div class="row"><div class="row-main"><b>Log out of this browser</b>' +
-			'<span>Revokes the grant so this browser has to scan a new QR.</span></div>' +
-			'<button class="btn danger sm" id="revoke">Log out</button></div></div>');
-		$('#clearLocal').onclick = () => {
-			storeSession(null);
-			shut();
-			toast('Local cache cleared. Reload to pair again.');
-		};
-		$('#revoke').onclick = () => {
-			/*
-			 * Was storeSession(null) + reload, which only forgot the pairing locally. The
-			 * grant at chats/{tenant}/sessions/{uid} survived, so the phone's Linked devices
-			 * list kept showing a browser that had already logged out, and the rules kept
-			 * honouring it. revokeDevice deletes the grant first and reloads afterwards.
-			 */
-			revokeDevice(state.uid);
-		};
+	$('#clearCacheBtn').onclick = () => {
+		storeSession(null);
+		toast('Local cache cleared. Reload to pair again.');
 	};
 
 	$('#helpBtn').onclick = () => showPage('help');
