@@ -1388,6 +1388,20 @@ body.resizing { user-select: none; cursor: col-resize; }
 	height: 34px;
 	min-width: 34px;
 	font-size: 13px;
+	/*
+	 * The letter was sitting outside the disc. `.thread-who span` further up carries
+	 * `display: block` and is one point more specific than `.conv-av`, so it beat the disc's
+	 * own grid centring and the initial fell back to normal text flow - top left, and out the
+	 * side once the disc came down to 34px. Two classes outrank one class plus one element,
+	 * so the centring is restated here where it wins.
+	 */
+	display: grid;
+	place-items: center;
+	text-align: center;
+	line-height: 1;
+	overflow: hidden;
+	color: #fff;
+	font-weight: 650;
 }
 
 .thread-who > span {
