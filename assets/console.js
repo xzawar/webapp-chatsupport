@@ -115,6 +115,18 @@ const el = (tag, cls, text) => {
 	return n;
 };
 
+/*
+ * Write a text node only when the text is actually different.
+ *
+ * Assigning textContent tears down the existing text node and makes a new one even when the
+ * string is identical, which loses any selection inside it and dirties the node for no reason.
+ * Every incremental painter below goes through this.
+ */
+const setText = (node, text) => {
+	const next = text == null ? '' : String(text);
+	if (node.textContent !== next) node.textContent = next;
+};
+
 function randomId(length) {
 	const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 	const bytes = new Uint8Array(length);
@@ -885,18 +897,43 @@ function ownedFeatures() {
 	return owned;
 }
 
-function renderRail() {
-	const top = $('#railTop');
-	const foot = $('#railFoot');
-	if (!top || !foot) return;
+/*
+ * The rail, patched in place instead of rebuilt.
+ *
+ * renderRail() used to start with `top.innerHTML = ''; foot.innerHTML = ''` and build five
+ * buttons, an SVG each, from scratch. watchConversations() calls it on every RTDB snapshot, so a
+ * single incoming message threw away the rail and made a new one: the icons blinked, the badge
+ * restarted, and any :hover or :focus the pointer was sitting on was lost because the node under
+ * the cursor no longer existed.
+ *
+ * The buttons are built once and then only the two things that actually change - the active
+ * class and the badge number - are written. The identity chip is repainted only when the tenant
+ * name, email or photo really differ, since it holds an <img> that would otherwise refetch.
+ */
+let railNodes = null;
+let railChipKey = '';
+
+function paintRailBadge(btn, count) {
+	let badge = btn.querySelector('.rail-badge');
+	if (count > 0) {
+		if (!badge) {
+			badge = el('span', 'rail-badge');
+			btn.appendChild(badge);
+		}
+		setText(badge, String(count));
+	} else if (badge) {
+		badge.remove();
+	}
+}
+
+function buildRail(top, foot) {
 	top.innerHTML = '';
 	foot.innerHTML = '';
-
-	const pending = state.conversations.filter((c) => c.status === 'pending').length;
-	const unread = state.conversations.reduce((sum, c) => sum + (c.unread > 0 ? 1 : 0), 0);
+	railNodes = { buttons: new Map(), chip: null };
+	railChipKey = '';
 
 	const button = (page) => {
-		const btn = el('button', 'rail-btn' + (state.page === page.id ? ' active' : ''));
+		const btn = el('button', 'rail-btn');
 		btn.type = 'button';
 		// Icons only, so the label has to survive as the accessible name and as the tooltip.
 		// Without both, an icon rail is a row of unlabelled squares to a screen reader and a
@@ -904,9 +941,8 @@ function renderRail() {
 		btn.title = page.label;
 		btn.setAttribute('aria-label', page.label);
 		btn.innerHTML = ICONS[page.icon] || ICONS.chat;
-		const count = page.id === 'chats' ? unread + pending : 0;
-		if (count > 0) btn.appendChild(el('span', 'rail-badge', String(count)));
 		btn.onclick = () => showPage(page.id);
+		railNodes.buttons.set(page.id, btn);
 		return btn;
 	};
 
@@ -917,10 +953,20 @@ function renderRail() {
 
 	// The workspace avatar is pinned to the bottom, under the settings button, the way the
 	// reference does it. It is an identity marker rather than a control, so it is not a button.
+	railNodes.chip = el('span', 'rail-me');
+	foot.appendChild(railNodes.chip);
+}
+
+function paintRailChip(chip) {
 	const name = (state.tenant && (state.tenant.companyName || state.tenant.ownerName)) || '';
 	const mail = (state.tenant && state.tenant.email) || '';
 	const photo = ownerPhotoSrc(state.tenant);
-	const chip = el('span', 'rail-me', photo ? '' : avatarLetter(name, mail));
+	const key = name + '\u0001' + mail + '\u0001' + (photo || '');
+	if (key === railChipKey) return;
+	railChipKey = key;
+
+	chip.innerHTML = '';
+	chip.classList.remove('has-photo');
 	chip.title = name || mail || 'Paired browser';
 
 	if (photo) {
@@ -943,9 +989,25 @@ function renderRail() {
 		chip.classList.add('has-photo');
 		chip.appendChild(img);
 	} else {
+		chip.textContent = avatarLetter(name, mail);
 		chip.style.background = avatarFor(name || mail || 'workspace');
 	}
-	foot.appendChild(chip);
+}
+
+function renderRail() {
+	const top = $('#railTop');
+	const foot = $('#railFoot');
+	if (!top || !foot) return;
+	if (!railNodes || !top.firstChild) buildRail(top, foot);
+
+	const pending = state.conversations.filter((c) => c.status === 'pending').length;
+	const unread = state.conversations.reduce((sum, c) => sum + (c.unread > 0 ? 1 : 0), 0);
+
+	for (const [id, btn] of railNodes.buttons) {
+		btn.classList.toggle('active', state.page === id);
+		paintRailBadge(btn, id === 'chats' ? unread + pending : 0);
+	}
+	paintRailChip(railNodes.chip);
 }
 
 function showPage(id) {
@@ -978,23 +1040,123 @@ function matchesFilter(convo) {
 	}
 }
 
+/*
+ * The filter chips are five static buttons whose only changing property is which one carries
+ * `.on`. Rebuilding them on every inbox paint - which is every RTDB snapshot - meant five
+ * elements were destroyed and recreated to move one class.
+ */
+let chipNodes = null;
+
 function renderChips() {
 	const host = $('#chips');
-	host.innerHTML = '';
-	for (const f of FILTERS) {
-		const btn = el('button', 'chip-btn' + (state.filter === f ? ' on' : ''), f);
-		btn.onclick = () => {
-			state.filter = f;
-			renderInbox();
-		};
-		host.appendChild(btn);
+	if (!host) return;
+	if (!chipNodes || !host.firstChild) {
+		host.innerHTML = '';
+		chipNodes = new Map();
+		for (const f of FILTERS) {
+			const btn = el('button', 'chip-btn', f);
+			btn.onclick = () => {
+				if (state.filter === f) return;
+				state.filter = f;
+				renderInbox();
+			};
+			host.appendChild(btn);
+			chipNodes.set(f, btn);
+		}
+	}
+	for (const [f, btn] of chipNodes) btn.classList.toggle('on', state.filter === f);
+}
+
+/*
+ * The inbox, reconciled by conversation id rather than rebuilt.
+ *
+ * The old renderInbox() opened with `host.innerHTML = ''` and then made a fresh button, avatar
+ * disc and four spans for every conversation. watchConversations() fires that on every write to
+ * the conversations node - a visitor typing sends a lastMessage update per message - so the
+ * entire list was destroyed and rebuilt several times a minute. That is what the flashing was:
+ * not a repaint of changed text, but a list of new elements fading in from scratch, with the
+ * scroll position, the hover state and the keyboard focus going with them.
+ *
+ * Now each conversation keeps its DOM node for as long as it is on screen. A snapshot writes
+ * only the fields that differ, moves nodes that changed position, and removes the ones that left
+ * the filter. A message arriving in a thread you are not looking at now touches two text nodes
+ * and a badge.
+ */
+let convNodes = new Map();
+let inboxEmptyNode = null;
+
+function buildConvNode(convo) {
+	const root = el('button', 'conv');
+	const body = el('span', 'conv-body');
+	const line1 = el('span', 'conv-line1');
+	const name = el('b');
+	const time = el('span', 'conv-time');
+	const line2 = el('span', 'conv-line2');
+	const prev = el('span', 'conv-prev');
+
+	line1.appendChild(name);
+	line1.appendChild(time);
+	line2.appendChild(prev);
+	body.appendChild(line1);
+	body.appendChild(line2);
+
+	const av = avatarNode('conv-av', convo);
+	root.appendChild(av);
+	root.appendChild(body);
+	root.onclick = () => openConversation(convo.id);
+
+	return { root, av, avKey: '', name, time, prev, line2, tag: null, unread: null };
+}
+
+function paintConvNode(entry, convo) {
+	// The disc is the one expensive child - it can hold an <img> - so it is only replaced when
+	// the values it is drawn from actually change.
+	const avKey = convo.id + '\u0001' + convo.name + '\u0001' + convo.email + '\u0001' + (convo.photoUrl || '');
+	if (entry.avKey !== avKey) {
+		entry.avKey = avKey;
+		const fresh = avatarNode('conv-av', convo);
+		entry.root.replaceChild(fresh, entry.av);
+		entry.av = fresh;
+	}
+
+	setText(entry.name, convo.name);
+	setText(entry.time, timeLabel(convo.lastAt));
+	setText(entry.prev, (convo.lastSender === 'agent' ? 'You: ' : '') + (convo.lastText || 'No messages yet'));
+	entry.root.classList.toggle('on', state.openId === convo.id);
+
+	const tagText = convo.status === 'pending' ? 'Pending' : convo.status === 'closed' ? 'Closed' : '';
+	if (!tagText) {
+		if (entry.tag) {
+			entry.tag.remove();
+			entry.tag = null;
+		}
+	} else {
+		if (!entry.tag) {
+			entry.tag = el('span', 'tag');
+			// Kept ahead of the unread badge whichever order they appeared in.
+			entry.line2.insertBefore(entry.tag, entry.unread || null);
+		}
+		const cls = 'tag ' + (convo.status === 'pending' ? 'pending' : 'closed');
+		if (entry.tag.className !== cls) entry.tag.className = cls;
+		setText(entry.tag, tagText);
+	}
+
+	if (convo.unread > 0) {
+		if (!entry.unread) {
+			entry.unread = el('span', 'unread');
+			entry.line2.appendChild(entry.unread);
+		}
+		setText(entry.unread, String(convo.unread));
+	} else if (entry.unread) {
+		entry.unread.remove();
+		entry.unread = null;
 	}
 }
 
 function renderInbox() {
 	renderChips();
 	const host = $('#convList');
-	host.innerHTML = '';
+	if (!host) return;
 	const needle = state.search.trim().toLowerCase();
 	const rows = state.conversations.filter((c) => {
 		if (!matchesFilter(c)) return false;
@@ -1003,31 +1165,41 @@ function renderInbox() {
 	});
 
 	if (rows.length === 0) {
-		host.appendChild(emptyState('chat', 'Nothing here', 'No conversations match this filter.'));
+		if (!inboxEmptyNode) {
+			host.innerHTML = '';
+			convNodes.clear();
+			inboxEmptyNode = emptyState('chat', 'Nothing here', 'No conversations match this filter.');
+			host.appendChild(inboxEmptyNode);
+		}
 		return;
 	}
+	if (inboxEmptyNode) {
+		inboxEmptyNode.remove();
+		inboxEmptyNode = null;
+	}
 
+	/*
+	 * Walk the wanted order and the live children together. A node already in the right place
+	 * is left alone entirely; only genuinely moved rows are re-inserted, so the common case of
+	 * "the top conversation got a new message and everything else stayed put" touches nothing.
+	 */
+	let cursor = host.firstChild;
+	const seen = new Set();
 	for (const convo of rows) {
-		const btn = el('button', 'conv' + (state.openId === convo.id ? ' on' : ''));
-		btn.appendChild(avatarNode('conv-av', convo));
-
-		const body = el('span', 'conv-body');
-		const line1 = el('span', 'conv-line1');
-		line1.appendChild(el('b', null, convo.name));
-		line1.appendChild(el('span', 'conv-time', timeLabel(convo.lastAt)));
-		body.appendChild(line1);
-
-		const line2 = el('span', 'conv-line2');
-		const prefix = convo.lastSender === 'agent' ? 'You: ' : '';
-		line2.appendChild(el('span', 'conv-prev', prefix + (convo.lastText || 'No messages yet')));
-		if (convo.status === 'pending') line2.appendChild(el('span', 'tag pending', 'Pending'));
-		else if (convo.status === 'closed') line2.appendChild(el('span', 'tag closed', 'Closed'));
-		if (convo.unread > 0) line2.appendChild(el('span', 'unread', String(convo.unread)));
-		body.appendChild(line2);
-
-		btn.appendChild(body);
-		btn.onclick = () => openConversation(convo.id);
-		host.appendChild(btn);
+		seen.add(convo.id);
+		let entry = convNodes.get(convo.id);
+		if (!entry) {
+			entry = buildConvNode(convo);
+			convNodes.set(convo.id, entry);
+		}
+		paintConvNode(entry, convo);
+		if (entry.root !== cursor) host.insertBefore(entry.root, cursor);
+		else cursor = cursor.nextSibling;
+	}
+	for (const [id, entry] of convNodes) {
+		if (seen.has(id)) continue;
+		entry.root.remove();
+		convNodes.delete(id);
 	}
 }
 
@@ -1043,104 +1215,244 @@ function currentConvo() {
 	return state.conversations.find((c) => c.id === state.openId) || null;
 }
 
+/*
+ * The thread, reconciled by message id rather than rebuilt.
+ *
+ * The old renderThread() emptied #threadHead, #msgs and #threadFoot and rebuilt all three from
+ * scratch. It was called from watchMessages() on every snapshot and from watchConversations() on
+ * every conversation write, which is the whole of the reported problem:
+ *
+ *   - every bubble in the thread was destroyed and remade, so every bubble replayed the
+ *     bubble-rise animation and the entire transcript flashed each time one message arrived
+ *   - the composer was replaced, so a half-typed reply, the caret position, the grown textarea
+ *     height and the keyboard focus were all thrown away mid-sentence
+ *   - the header's SVGs were reparsed to move one class
+ *
+ * Now the header is built once per conversation and only its text and lock icon are updated;
+ * messages are keyed and only the arriving one is inserted; the composer is left completely
+ * untouched unless the conversation's status actually changes what it should be. The one full
+ * teardown that remains is switching conversations, where every element genuinely is different.
+ */
+let threadState = { convoId: null, head: null, lockKey: '', composerMode: '', painted: false };
+let msgNodes = new Map();
+
+function clockLabel(ms) {
+	return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 function renderThread() {
 	const convo = currentConvo();
 	const head = $('#threadHead');
 	const msgs = $('#msgs');
 	const foot = $('#threadFoot');
+	if (!head || !msgs || !foot) return;
 
 	if (!convo) {
-		head.innerHTML = '';
-		foot.innerHTML = '';
-		msgs.innerHTML = '';
-		msgs.appendChild(emptyState('chat', 'Pick a conversation', 'Choose a thread on the left to read it here.'));
+		if (threadState.convoId !== null || !msgs.firstChild) {
+			head.innerHTML = '';
+			foot.innerHTML = '';
+			msgs.innerHTML = '';
+			msgNodes.clear();
+			msgs.appendChild(emptyState('chat', 'Pick a conversation', 'Choose a thread on the left to read it here.'));
+			threadState = { convoId: null, head: null, lockKey: '', composerMode: '', painted: false };
+		}
 		return;
 	}
 
-	// -------- header
-	head.innerHTML = '';
-	const back = el('button', 'icon-btn');
-	back.innerHTML = ICONS.back;
-	back.onclick = () => {
-		state.openId = null;
-		$('#page-chats').classList.remove('viewing');
-		if (state.unsubMsgs) state.unsubMsgs();
-		renderInbox();
-		renderThread();
-	};
-	head.appendChild(back);
+	if (threadState.convoId !== convo.id) {
+		head.innerHTML = '';
+		msgs.innerHTML = '';
+		foot.innerHTML = '';
+		msgNodes.clear();
+		threadState = { convoId: convo.id, head: null, lockKey: '', composerMode: '', painted: false };
+	}
 
-	const who = el('button', 'thread-who');
-	who.appendChild(avatarNode('conv-av', convo));
-	const text = el('span');
-	text.appendChild(el('b', null, convo.name));
-	text.appendChild(el('span', null, convo.email || convo.pageUrl || 'Website visitor'));
-	who.appendChild(text);
-	who.onclick = () => showProfile(convo);
-	head.appendChild(who);
+	renderThreadHead(head, convo);
+	renderMessages(msgs, convo);
+	renderComposer(foot, convo);
+}
 
-	/*
-	 * Both directions. Closing was already here; reopening was not, so a thread closed by
-	 * mistake could only be brought back from the phone. setStatusOf already accepted 'open'.
-	 */
+function renderThreadHead(head, convo) {
+	if (!threadState.head || !head.firstChild) {
+		const back = el('button', 'icon-btn');
+		back.innerHTML = ICONS.back;
+		back.onclick = () => {
+			state.openId = null;
+			$('#page-chats').classList.remove('viewing');
+			if (state.unsubMsgs) state.unsubMsgs();
+			renderInbox();
+			renderThread();
+		};
+		head.appendChild(back);
+
+		const who = el('button', 'thread-who');
+		const av = avatarNode('conv-av', convo);
+		const text = el('span');
+		const name = el('b');
+		const sub = el('span');
+		text.appendChild(name);
+		text.appendChild(sub);
+		who.appendChild(av);
+		who.appendChild(text);
+		// Reads the conversation at click time, not at build time, so a profile opened after a
+		// status or email change shows the current values.
+		who.onclick = () => showProfile(currentConvo() || convo);
+		head.appendChild(who);
+
+		/*
+		 * Both directions. Closing was already here; reopening was not, so a thread closed by
+		 * mistake could only be brought back from the phone. setStatusOf already accepted 'open'.
+		 */
+		const bolt = el('button', 'icon-btn');
+		bolt.onclick = () => {
+			const live = currentConvo();
+			if (live) setStatusOf(live.id, live.status === 'closed' ? 'open' : 'closed');
+		};
+		head.appendChild(bolt);
+
+		threadState.head = { name, sub, bolt };
+		threadState.lockKey = '';
+	}
+
+	const h = threadState.head;
+	setText(h.name, convo.name);
+	setText(h.sub, convo.email || convo.pageUrl || 'Website visitor');
+
+	// innerHTML on the lock button reparses an SVG, so it is only written when the state flips.
 	const locked = convo.status === 'closed';
-	const bolt = el('button', 'icon-btn' + (locked ? ' locked' : ''));
-	bolt.innerHTML = locked ? ICONS.unlock : ICONS.lock;
-	bolt.title = locked ? 'Unlock this chat' : 'Lock this chat';
-	bolt.setAttribute('aria-label', bolt.title);
-	bolt.onclick = () => setStatusOf(convo.id, locked ? 'open' : 'closed');
-	head.appendChild(bolt);
+	const lockKey = locked ? 'locked' : 'open';
+	if (threadState.lockKey !== lockKey) {
+		threadState.lockKey = lockKey;
+		h.bolt.className = 'icon-btn' + (locked ? ' locked' : '');
+		h.bolt.innerHTML = locked ? ICONS.unlock : ICONS.lock;
+		h.bolt.title = locked ? 'Unlock this chat' : 'Lock this chat';
+		h.bolt.setAttribute('aria-label', h.bolt.title);
+	}
+}
 
-	// -------- messages
+function buildMessageNode(m, convo) {
+	if (m.sender === 'system') return { root: el('div', 'sysline', m.text), sys: true };
+
+	const out = m.sender === 'agent';
+	const root = el('div', 'msg-wrap' + (out ? ' out' : ''));
+	if (!out) root.appendChild(msgAvatar(m, convo));
+	const bubble = el('div', 'bubble');
+	// No read receipts. The app does not draw them in a bubble, so neither does this.
+	// Text first, timestamp second. The old order relied on a float and short messages wrapped
+	// themselves around it.
+	const txt = el('span', 'txt', m.text);
+	const meta = el('span', 'meta', clockLabel(m.createdAt));
+	bubble.appendChild(txt);
+	bubble.appendChild(meta);
+	root.appendChild(bubble);
+	return { root, bubble, txt, meta };
+}
+
+function paintMessageNode(entry, m) {
+	if (entry.sys) {
+		setText(entry.root, m.text);
+		return;
+	}
+	setText(entry.txt, m.text);
+	setText(entry.meta, clockLabel(m.createdAt));
+}
+
+function renderMessages(msgs, convo) {
 	const atBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 90;
-	msgs.innerHTML = '';
+
+	// Day separators are keyed by their label, so they survive alongside the messages under them.
+	const items = [];
 	let lastDay = '';
 	for (const m of state.messages) {
 		const day = dayLabel(m.createdAt);
 		if (day !== lastDay) {
-			msgs.appendChild(el('div', 'daystamp', day));
+			items.push({ key: 'day\u0001' + day, day });
 			lastDay = day;
 		}
-		if (m.sender === 'system') {
-			msgs.appendChild(el('div', 'sysline', m.text));
-			continue;
-		}
-		const out = m.sender === 'agent';
-		const wrap = el('div', 'msg-wrap' + (out ? ' out' : ''));
-		if (!out) wrap.appendChild(msgAvatar(m, convo));
-		const bubble = el('div', 'bubble');
-		// No read receipts. The app does not draw them in a bubble, so neither does this.
-		const meta = el('span', 'meta', new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-		// Text first, timestamp second. The old order relied on a float and short messages wrapped
-		// themselves around it.
-		bubble.appendChild(el('span', 'txt', m.text));
-		bubble.appendChild(meta);
-		wrap.appendChild(bubble);
-		msgs.appendChild(wrap);
+		items.push({ key: 'msg\u0001' + m.id, m });
 	}
-	if (state.messages.length === 0) {
-		msgs.appendChild(emptyState('chat', 'No messages yet', 'Nothing has been said in this thread.'));
-	}
-	if (atBottom) requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
 
-	// -------- composer
+	if (items.length === 0) {
+		if (!msgNodes.has('empty')) {
+			msgs.innerHTML = '';
+			msgNodes.clear();
+			const node = emptyState('chat', 'No messages yet', 'Nothing has been said in this thread.');
+			msgs.appendChild(node);
+			msgNodes.set('empty', { root: node });
+		}
+		return;
+	}
+	if (msgNodes.has('empty')) {
+		msgs.innerHTML = '';
+		msgNodes.clear();
+	}
+
+	let cursor = msgs.firstChild;
+	let added = false;
+	const seen = new Set();
+	for (const item of items) {
+		seen.add(item.key);
+		let entry = msgNodes.get(item.key);
+		if (!entry) {
+			entry = item.m ? buildMessageNode(item.m, convo) : { root: el('div', 'daystamp', item.day) };
+			msgNodes.set(item.key, entry);
+			added = true;
+			/*
+			 * Only a message that arrives into a thread already on screen gets the rise
+			 * animation, and it is dropped again once it has played. Opening a conversation
+			 * paints its history flat, and an existing bubble that is merely moved or edited
+			 * never animates - that replay across every bubble was the flash.
+			 */
+			if (threadState.painted && entry.bubble) {
+				entry.bubble.classList.add('is-new');
+				entry.bubble.addEventListener(
+					'animationend',
+					() => entry.bubble.classList.remove('is-new'),
+					{ once: true },
+				);
+			}
+		} else if (item.m) {
+			paintMessageNode(entry, item.m);
+		}
+		if (entry.root !== cursor) msgs.insertBefore(entry.root, cursor);
+		else cursor = cursor.nextSibling;
+	}
+	for (const [key, entry] of msgNodes) {
+		if (seen.has(key)) continue;
+		entry.root.remove();
+		msgNodes.delete(key);
+	}
+
+	threadState.painted = true;
+	// Only chase the bottom when something was actually appended. A read-receipt write used to
+	// yank the view down while someone was reading further up.
+	if (added && atBottom) requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+}
+
+function renderComposer(foot, convo) {
+	const mode = convo.status === 'pending' ? 'pending' : convo.status === 'closed' ? 'closed' : 'open';
+	// The whole point: an unchanged composer is left exactly as the person left it, draft text,
+	// caret, height, focus and all.
+	if (threadState.composerMode === mode && foot.firstChild) return;
+	threadState.composerMode = mode;
 	foot.innerHTML = '';
-	if (convo.status === 'pending') {
+
+	if (mode === 'pending') {
 		const bar = el('div', 'startbar');
 		const btn = el('button', 'btn', 'Start chat');
-		btn.onclick = () => setStatusOf(convo.id, 'open');
+		btn.onclick = () => setStatusOf(threadState.convoId, 'open');
 		bar.appendChild(btn);
 		foot.appendChild(bar);
 		return;
 	}
-	if (convo.status === 'closed') {
+	if (mode === 'closed') {
 		const bar = el('div', 'startbar locked');
 		const note = el('span', 'lock-note');
 		note.innerHTML = ICONS.lock;
 		note.appendChild(el('span', null, 'This chat is locked'));
 		bar.appendChild(note);
 		const undo = el('button', 'btn ghost', 'Unlock');
-		undo.onclick = () => setStatusOf(convo.id, 'open');
+		undo.onclick = () => setStatusOf(threadState.convoId, 'open');
 		bar.appendChild(undo);
 		foot.appendChild(bar);
 		return;
