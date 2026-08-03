@@ -62,8 +62,8 @@ export const ICONS = {
 	 * Identical body and keyhole in both, so the pair reads as one control in two states -
 	 * only the shackle moves.
 	 */
-	lock: `<svg viewBox="0 0 24 24" fill="none" stroke="#FFFF" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4.7" y="10.3" width="14.6" height="10.5" rx="2.9"/><path d="M8.3 10.3V7.5a3.7 3.7 0 0 1 7.05-1.5"/><circle cx="12" cy="14.7" r="1.45" fill="#E5484D" stroke="none"/><path d="M12 15.5v2.3"/></svg>`,
-	unlock: `<svg viewBox="0 0 24 24" fill="none" stroke="#E5484D" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4.7" y="10.3" width="14.6" height="10.5" rx="2.9"/><path d="M8.3 10.3V7.7a3.7 3.7 0 0 1 7.4 0v2.6"/><circle cx="12" cy="14.7" r="1.45" fill="#FFFFFF" stroke="none"/><path d="M12 15.5v2.3"/></svg>`,
+	lock: `<svg viewBox="0 0 24 24" fill="none" stroke="#FFFF" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4.7" y="10.3" width="14.6" height="10.5" rx="2.9"/><path d="M8.3 10.3V7.5a3.7 3.7 0 0 1 7.05-1.5"/><circle cx="12" cy="14.7" r="1.45" fill="#FFFFF" stroke="none"/><path d="M12 15.5v2.3"/></svg>`,
+	unlock: `<svg viewBox="0 0 24 24" fill="none" stroke="#E5484D" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4.7" y="10.3" width="14.6" height="10.5" rx="2.9"/><path d="M8.3 10.3V7.7a3.7 3.7 0 0 1 7.4 0v2.6"/><circle cx="12" cy="14.7" r="1.45" fill="#E5484D" stroke="none"/><path d="M12 15.5v2.3"/></svg>`,
 	help: `${open}<circle cx="12" cy="12" r="8.6"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.4 2.35c-.72.3-1 .86-1 1.6v.35"/><path d="M12 16.9h.01"/></svg>`,
 	image: `${open}<rect x="2.8" y="4.4" width="18.4" height="15.2" rx="3.4"/><circle cx="8.6" cy="9.6" r="1.9"/><path d="m3.6 16.8 4.4-3.8a2 2 0 0 1 2.6 0l2.2 1.9 2-1.7a2 2 0 0 1 2.6 0l3 2.6"/></svg>`,
 	moon: `${open}<path d="M20.2 14.4A8.5 8.5 0 0 1 9.6 3.8a8.7 8.7 0 1 0 10.6 10.6Z"/></svg>`,
