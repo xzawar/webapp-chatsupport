@@ -1321,12 +1321,12 @@ body.resizing { user-select: none; cursor: col-resize; }
 	 * A CSS filter would have to run over the whole repeating layer on every scroll frame;
 	 * two PNGs cost 48KB each once and nothing after that.
 	 *
-	 * The sheets ship at their full 564px source width but are drawn at 200px, so the doodles
-	 * read small and there are ~2.8 source pixels behind every drawn one. That headroom is
+	 * The sheets ship at their full 564px source width but are drawn at 165px, so the doodles
+	 * read small and there are ~3.4 source pixels behind every drawn one. That headroom is
 	 * what keeps the edges clean on retina rather than resampling mush.
 	 */
 	--chat-bg-image: url('chat-bg-light.png');
-	--chat-bg-size: 200px auto;
+	--chat-bg-size: 165px auto;
 	--ios-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, system-ui, sans-serif;
 }
 
