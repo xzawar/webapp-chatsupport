@@ -1767,3 +1767,244 @@ html:not([data-theme='dark']) .search-pill input:focus-visible {
 	outline: 2px solid var(--brand-deep);
 	outline-offset: 2px;
 }
+
+/* =====================================================================
+   REFERENCE SKIN
+   =====================================================================
+
+   Appended deliberately as one block at the end of the file rather than edited into the
+   sections above, for two reasons. It wins on the cascade without a single !important, and it
+   can be deleted in one selection to get the previous look back - which matters, because it
+   knowingly breaks the rule stated at the top of this stylesheet.
+
+   WHAT IT BREAKS, AND WHY
+
+   The header says every token is transcribed from Color.kt and nothing should be adjusted here
+   first. This block overrides the accent and the outgoing bubble to WhatsApp green. That is a
+   deliberate divergence from the Android app's Telegram-blue palette, requested for the web
+   console specifically. If the two surfaces are meant to match again, delete this block; do not
+   patch Color.kt to chase it.
+
+   WHAT IT CHANGES
+
+   Shape, mostly. The console becomes a floating rounded window on a grey desk instead of a
+   full-bleed page; the list gets larger avatars, heavier names and hairline separators; the
+   thread header gets a caption above a large title; bubbles get the tighter radius and the
+   green outgoing fill; the composer becomes a single pill. No markup or script changes, so
+   every id and class console.js writes still behaves exactly as before.
+   ===================================================================== */
+
+:root {
+	/* WhatsApp green. --brand-deep is what chips and the selected rail item read, so it moves too. */
+	--brand: #25d366;
+	--brand-pressed: #1da851;
+	--brand-deep: #1da851;
+	--bubble-out: #25d366;
+	--bubble-out-text: #ffffff;
+	/* The desk the window sits on. Distinctly darker than --surface or the card edge vanishes. */
+	--desk: #d9dbd7;
+	--list-sep: #f0f2f5;
+	--row-on: #f0f2f5;
+}
+
+[data-theme='dark'] {
+	--brand: #25d366;
+	--brand-pressed: #1da851;
+	--brand-deep: #1da851;
+	/* Dark outgoing bubbles are the deep teal, not the bright green: white text on #25d366 in a
+	   dark room is the one combination in this palette that genuinely glares. */
+	--bubble-out: #005c4b;
+	--bubble-out-text: #e9edef;
+	--desk: #0b0b0b;
+	--list-sep: #202020;
+	--row-on: #202020;
+}
+
+body { background: var(--desk); }
+
+/* ------------------------------------------------------------------ the window */
+
+#shell {
+	height: calc(100% - 38px);
+	max-width: 1600px;
+	margin: 19px auto;
+	border-radius: 14px;
+	overflow: hidden;
+	box-shadow: 0 12px 40px rgba(11, 20, 26, 0.18);
+	background: var(--surface);
+}
+
+/* Below the desk margins the frame is wasted space, so the window goes full-bleed again. */
+@media (max-width: 1000px) {
+	#shell { height: 100%; margin: 0; border-radius: 0; box-shadow: none; }
+}
+
+.rail {
+	background: var(--surface-low);
+	border-right: 1px solid var(--list-sep);
+}
+
+/* The topbar is chrome inside a window now, so it loses its own shadow line and sits flush. */
+.topbar {
+	height: 62px;
+	flex: 0 0 62px;
+	border-bottom: 1px solid var(--list-sep);
+}
+
+.topbar h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+
+/* ------------------------------------------------------------------ the list */
+
+.inbox { border-right: 1px solid var(--list-sep); }
+
+.inbox-head { padding: 12px 14px 8px; }
+
+.search-pill {
+	background: var(--list-sep);
+	border-radius: 10px;
+	padding: 9px 14px;
+}
+
+.search-pill input { font-size: 14px; }
+
+.chips { padding: 8px 14px 10px; }
+
+.conv {
+	gap: 14px;
+	padding: 10px 14px;
+	position: relative;
+}
+
+/*
+ * Separators drawn as an inset pseudo-element rather than a border, so the line starts at the
+ * text and not under the avatar - the detail that makes a list read as rows of people instead
+ * of a table. An inset border-bottom would also shift every row by a pixel on hover.
+ */
+.conv::after {
+	content: '';
+	position: absolute;
+	left: 76px;
+	right: 0;
+	bottom: 0;
+	height: 1px;
+	background: var(--list-sep);
+}
+
+.conv:last-child::after { display: none; }
+.conv:hover { background: var(--surface-low); }
+.conv.on { background: var(--row-on); }
+.conv.on::after { display: none; }
+
+.conv-av { width: 49px; height: 49px; font-size: 17px; }
+
+.conv-line1 b { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.conv-time { font-size: 12px; }
+.conv-prev { font-size: 14px; color: var(--on-muted); }
+
+/* The unread pill: green, circular at one digit, and the only saturated thing in the list. */
+.unread {
+	background: var(--brand);
+	color: #fff;
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 1;
+	min-width: 20px;
+	height: 20px;
+	border-radius: 999px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0 6px;
+	margin-left: auto;
+	flex: 0 0 auto;
+}
+
+/* ------------------------------------------------------------------ the thread */
+
+.thread { background: var(--wallpaper); }
+
+/*
+ * The wallpaper image is switched off. The reference has a plain field behind the bubbles, and
+ * a patterned one under white bubbles with this much less bubble contrast turns the whole panel
+ * noisy. The rule stays here (rather than the asset being deleted) so restoring it is one line.
+ */
+.thread::before { display: none; }
+
+.thread-head {
+	height: 66px;
+	flex: 0 0 66px;
+	background: var(--surface);
+	border-bottom: 1px solid var(--list-sep);
+}
+
+.thread-who .conv-av { width: 42px; height: 42px; font-size: 15px; }
+
+/*
+ * Caption above title, as in the reference: the small grey line reads first and the name is the
+ * heading. The DOM already emits <b> then <span>, so this is column-reverse rather than any
+ * change to console.js.
+ */
+.thread-who {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.thread-who > span {
+	display: flex;
+	flex-direction: column-reverse;
+	min-width: 0;
+}
+
+.thread-who b { font-size: 21px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.15; }
+.thread-who > span > span { font-size: 12.5px; color: var(--on-muted); }
+
+.msgs { padding: 22px 8% 14px; }
+
+.bubble {
+	border-radius: 12px;
+	box-shadow: 0 1px 1px rgba(11, 20, 26, 0.07);
+	padding: 8px 11px 7px;
+	max-width: 62%;
+}
+
+.msg-wrap.out .bubble {
+	background: var(--bubble-out);
+	color: var(--bubble-out-text);
+}
+
+/* 7px rather than the previous 6px tail, and only on the last corner, matching the reference. */
+.msg-wrap.out .bubble { border-bottom-right-radius: 7px; }
+.msg-wrap:not(.out) .bubble { border-bottom-left-radius: 7px; }
+
+.daystamp {
+	background: var(--surface);
+	color: var(--on-muted);
+	border-radius: 999px;
+	padding: 5px 13px;
+	font-size: 12px;
+	box-shadow: 0 1px 1px rgba(11, 20, 26, 0.06);
+}
+
+/* ------------------------------------------------------------------ the composer */
+
+.composer {
+	background: var(--surface);
+	border-top: 1px solid var(--list-sep);
+	padding: 10px 14px;
+	align-items: center;
+	gap: 8px;
+}
+
+/* One pill holding the text, with the icon buttons riding inside it rather than beside it. */
+.composer textarea {
+	background: var(--list-sep);
+	border-radius: 999px;
+	border: 0;
+	padding: 11px 18px;
+	font-size: 15px;
+	min-height: 44px;
+}
+
+.composer .icon-btn { color: var(--on-muted); }
+.composer .icon-btn:hover { color: var(--on-surface); background: var(--list-sep); }
